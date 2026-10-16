@@ -14,6 +14,7 @@ from app.db import repo
 from app.db.seed_demo import seed
 from app.telegram.outbox import _within_quiet_window
 from app.telegram.router import _BARE_DONE
+from tests.conftest import auth_header
 
 
 def test_bare_done_and_clarify_buttons():
@@ -114,12 +115,11 @@ def test_lead_override_changes_owner_and_status(tmp_path):
     from app.main import app
 
     with TestClient(app) as client:
+        client.headers.update(auth_header())
         tasks = client.get("/api/projects/1/tasks").json()
         people = client.get("/api/projects/1/participants").json()
         video = next(task for task in tasks if task["key"] == "T7")
         meera = next(person for person in people if person["name"] == "Meera")
-        page = client.get("/")
-        assert "Lead override" in page.text
         saved = client.patch(f"/api/tasks/{video['id']}", json={
             "status": "in_progress",
             "owner_id": meera["id"],

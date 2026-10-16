@@ -1,27 +1,58 @@
+# Accounts stack: Postgres + accounts API + React dashboard.
+# The Cadence API itself (bot, agents, board data) runs outside Docker:
+#     .venv/bin/python -m app.main          # http://localhost:8000
+# Everything reads the repo-root .env; SECRET_KEY must be the same for both APIs.
 services:
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: app_frontend
+  db:
+    image: postgres:16-alpine
+    container_name: cadence_db
+    environment:
+      POSTGRES_USER: cadence
+      POSTGRES_PASSWORD: cadence
+      POSTGRES_DB: cadence
     ports:
-      - "5173:5173"
+      - "5432:5432"
     volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    env_file:
-      - ./frontend/.env
-    depends_on:
-      - backend
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cadence -d cadence"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: app_backend
+    container_name: cadence_accounts
     ports:
-      - "8000:8000"
+      - "8001:8001"
     volumes:
       - ./backend:/app
     env_file:
-      - ./backend/.env
+      - ./.env
+    environment:
+      # Inside Docker the database host is the "db" service, not localhost.
+      DATABASE_URL: postgresql+psycopg://cadence:cadence@db:5432/cadence
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cadence_frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      VITE_AUTH_API_URL: http://localhost:8001
+      VITE_CADENCE_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

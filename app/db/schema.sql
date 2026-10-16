@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS projects (
   status          TEXT NOT NULL DEFAULT 'draft'
                   CHECK (status IN ('draft','active','archived')),
   settings_json   TEXT NOT NULL DEFAULT '{}',      -- thresholds, cadence, demo_mode
+  owner_user_id   INTEGER,                         -- users.id in the backend's Postgres; NULL = shared demo
   created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

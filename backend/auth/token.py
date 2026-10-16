@@ -1,4 +1,4 @@
-from jose import JWTError, jwt  
+from jose import JWTError, jwt
 import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
@@ -7,18 +7,21 @@ from schemas.all_schema import TokenData
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY") or "abc"
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "SECRET_KEY is not set. Use the same value as the Cadence API (root .env), "
+        "otherwise the dashboard rejects every login."
+    )
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 210
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "720"))
 
 
-
-def create_access_token(data: dict, expires_delta: timedelta = timedelta(minutes=60)):
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
-    else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=60)
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt

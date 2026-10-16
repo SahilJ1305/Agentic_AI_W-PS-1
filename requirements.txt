@@ -9,4 +9,5 @@ httpx
 pyyaml
 apscheduler>=3.10
 python-multipart
+pyjwt
 pytest

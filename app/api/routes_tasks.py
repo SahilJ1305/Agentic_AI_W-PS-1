@@ -7,9 +7,10 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.api.auth import CurrentUser, can_see, current_user, visible_project, visible_task
 from app.api.sse import broadcaster
 from app.config import settings
 from app.db import repo
@@ -24,8 +25,15 @@ def _now() -> str:
 
 
 @router.get("/projects/{pid}/tasks")
-async def list_tasks(pid: int, status: str | None = None, owner_id: int | None = None, readiness: str | None = None):
+async def list_tasks(
+    pid: int,
+    status: str | None = None,
+    owner_id: int | None = None,
+    readiness: str | None = None,
+    user: CurrentUser = Depends(current_user),
+):
     async with repo.db_context() as db:
+        await visible_project(db, pid, user)
         tasks = await repo.list_tasks(db, pid, status=status, owner_id=owner_id, readiness=readiness)
         names = {
             person["id"]: person["name"]
@@ -39,11 +47,9 @@ async def list_tasks(pid: int, status: str | None = None, owner_id: int | None =
 
 
 @router.get("/tasks/{tid}")
-async def get_task(tid: int):
+async def get_task(tid: int, user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
-        task = await repo.get_task(db, tid)
-        if not task:
-            raise HTTPException(404, "Task not found")
+        task = await visible_task(db, tid, user)
         events = await repo.list_task_events(db, tid)
         blockers = await repo.list_open_blockers_for_task(db, tid)
         deps_up = await repo.list_dependencies_upstream(db, tid)
@@ -66,13 +72,11 @@ class PatchTaskRequest(BaseModel):
 
 
 @router.patch("/tasks/{tid}")
-async def patch_task(tid: int, req: PatchTaskRequest):
+async def patch_task(tid: int, req: PatchTaskRequest, user: CurrentUser = Depends(current_user)):
     """Manual override from the dashboard. Requires reason and expected_version."""
     now = _now()
     async with repo.db_context() as db:
-        task = await repo.get_task(db, tid)
-        if not task:
-            raise HTTPException(404, "Task not found")
+        task = await visible_task(db, tid, user)
 
         if task["version"] != req.expected_version:
             raise HTTPException(409, f"Version conflict. Current version: {task['version']}")
@@ -95,7 +99,7 @@ async def patch_task(tid: int, req: PatchTaskRequest):
             event_type="owner_changed" if req.owner_id and req.owner_id != task.get("owner_id") else "override",
             old_value=task["status"],
             new_value=req.status or task["status"],
-            reason=req.reason,
+            reason=f"{req.reason} ({user.email})",
             actor="lead",
             now=now,
         )
@@ -132,13 +136,11 @@ async def patch_task(tid: int, req: PatchTaskRequest):
 
 
 @router.post("/tasks/{tid}/follow-up")
-async def send_followup(tid: int):
+async def send_followup(tid: int, user: CurrentUser = Depends(current_user)):
     """Send a follow-up now for this task."""
     now = _now()
     async with repo.db_context() as db:
-        task = await repo.get_task(db, tid)
-        if not task:
-            raise HTTPException(404, "Task not found")
+        task = await visible_task(db, tid, user)
         if not task.get("owner_id"):
             raise HTTPException(400, "Task has no owner")
 
@@ -162,9 +164,10 @@ async def send_followup(tid: int):
 
 
 @router.post("/tasks/{tid}/events/{event_id}/revert")
-async def revert_event(tid: int, event_id: int):
+async def revert_event(tid: int, event_id: int, user: CurrentUser = Depends(current_user)):
     now = _now()
     async with repo.db_context() as db:
+        task = await visible_task(db, tid, user)
         event = await repo.list_task_events(db, tid)
         target = next((e for e in event if e["id"] == event_id), None)
         if not target:
@@ -172,7 +175,6 @@ async def revert_event(tid: int, event_id: int):
         if target.get("reverted_by_event_id"):
             raise HTTPException(409, "Event already reverted")
 
-        task = await repo.get_task(db, tid)
         await repo.update_task_status(db, tid, status=target["old_value"], updated_at=now)
         revert_id = await repo.append_task_event(
             db,
@@ -180,7 +182,7 @@ async def revert_event(tid: int, event_id: int):
             event_type="reverted",
             old_value=target["new_value"],
             new_value=target["old_value"],
-            reason="Reverted by lead",
+            reason=f"Reverted by {user.email}",
             actor="lead",
             now=now,
         )
@@ -191,10 +193,11 @@ async def revert_event(tid: int, event_id: int):
 
 
 @router.get("/participants/{participant_id}/invite")
-async def participant_invite(participant_id: int):
+async def participant_invite(participant_id: int, user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
         person = await repo.get_participant(db, participant_id)
-    if not person:
+        project = await repo.get_project(db, person["project_id"]) if person else None
+    if not person or not can_see(project, user):
         raise HTTPException(404, "Participant not found")
     code = person["invite_code"]
     return {
@@ -205,8 +208,9 @@ async def participant_invite(participant_id: int):
 
 
 @router.get("/projects/{pid}/blockers")
-async def list_blockers(pid: int, status: str = "open"):
+async def list_blockers(pid: int, status: str = "open", user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
+        await visible_project(db, pid, user)
         tasks = await repo.list_tasks(db, pid)
         result = []
         for t in tasks:
@@ -216,19 +220,20 @@ async def list_blockers(pid: int, status: str = "open"):
 
 
 @router.post("/blockers/{bid}/resolve")
-async def resolve_blocker(bid: int, body: dict):
+async def resolve_blocker(bid: int, body: dict, user: CurrentUser = Depends(current_user)):
     now = _now()
     async with repo.db_context() as db:
         blocker = await repo.get_blocker(db, bid)
         if not blocker:
             raise HTTPException(404, "Blocker not found")
+        await visible_task(db, blocker["task_id"], user)
         await repo.resolve_blocker(db, bid, resolved_message_id=None, resolved_at=now)
         await repo.append_task_event(
             db,
             task_id=blocker["task_id"],
             event_type="blocker_resolved",
             old_value=blocker["description"],
-            reason=body.get("reason", "Resolved from dashboard"),
+            reason=body.get("reason", f"Resolved from the dashboard by {user.email}"),
             actor="lead",
             now=now,
         )
@@ -237,8 +242,9 @@ async def resolve_blocker(bid: int, body: dict):
 
 
 @router.get("/projects/{pid}/events")
-async def list_events(pid: int, since: str | None = None):
+async def list_events(pid: int, since: str | None = None, user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
+        await visible_project(db, pid, user)
         tasks = await repo.list_tasks(db, pid)
         events = []
         for t in tasks:
