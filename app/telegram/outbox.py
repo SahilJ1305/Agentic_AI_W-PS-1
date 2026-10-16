@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import RetryAfter, TelegramError
@@ -25,6 +25,10 @@ log = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
 POLL_INTERVAL_S = 1.0      # how often to check the outbox
 PER_CHAT_DELAY_S = 0.05    # ~20 msg/s per chat, well within Telegram limits
+
+# Replies to something the person just said are always sent.
+# Check-ins, nudges and alerts wait out the quiet window (R16).
+_REPLY_PREFIXES = ("ACK_", "CLARIFY_", "ASK_", "CONFIRM_", "VERIFY_", "DEPENDENCY_", "NOT_", "OFF_", "CORRECTION_", "PEER_")
 
 
 async def run_outbox_worker(bot: Bot) -> None:
@@ -46,9 +50,17 @@ async def _tick(bot: Bot) -> None:
     for row in rows:
         await asyncio.sleep(PER_CHAT_DELAY_S)
 
-        # Respect quiet window: QUIET_MIN — skip unsolicited messages in window
-        # (template_key-based: skip if not a reply and quiet window active)
-        # TODO: implement quiet window check (Tier 2 detail)
+        if not str(row.get("template_key") or "").startswith(_REPLY_PREFIXES):
+            async with repo.db_context() as db:
+                last_sent = await repo.last_outbox_sent_at(db, row["chat_id"])
+            if last_sent and _within_quiet_window(last_sent):
+                resume_at = (
+                    datetime.now(timezone.utc) + timedelta(minutes=settings.effective_quiet_min)
+                ).isoformat()
+                async with repo.db_context() as db:
+                    await repo.defer_outbox(db, row["id"], resume_at)
+                log.info("Quiet window: deferred outbox %s until %s", row["id"], resume_at)
+                continue
 
         try:
             markup = _build_markup(row.get("buttons_json"))
@@ -81,6 +93,17 @@ async def _tick(bot: Bot) -> None:
                     await repo.mark_outbox_permanent_failure(db, row["id"], error=str(e))
                 else:
                     await repo.mark_outbox_failed(db, row["id"], error=str(e))
+
+
+def _within_quiet_window(last_sent: str) -> bool:
+    try:
+        sent_at = datetime.fromisoformat(last_sent)
+    except ValueError:
+        return False
+    if sent_at.tzinfo is None:
+        sent_at = sent_at.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - sent_at
+    return age < timedelta(minutes=settings.effective_quiet_min)
 
 
 def _build_markup(buttons_json: str | None) -> InlineKeyboardMarkup | None:

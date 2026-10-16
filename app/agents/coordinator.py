@@ -10,14 +10,36 @@ import logging
 from pathlib import Path
 
 import aiosqlite
+import yaml
 
 from app.agents.schemas import Interpretation
-from app.config import settings
 from app.llm.gateway import LLMFailure, call_llm
 
 log = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "coordinator_system.md").read_text()
+_PROMPTS = Path(__file__).parent / "prompts"
+_SYSTEM_PROMPT = (_PROMPTS / "coordinator_system.md").read_text()
+_FEWSHOTS = _PROMPTS / "fewshots.yaml"
+
+
+def _examples_text() -> str:
+    """Compact few-shots so Hinglish, multi-task, and undo examples reach the model."""
+    if not _FEWSHOTS.exists():
+        return ""
+    data = yaml.safe_load(_FEWSHOTS.read_text()) or {}
+    lines = ["Examples (message → what to report):"]
+    for case in data.get("cases") or []:
+        expected = case.get("expected") or {}
+        updates = expected.get("updates") or []
+        summary = expected.get("intent", "status_update")
+        if updates:
+            bits = []
+            for update in updates:
+                status = update.get("status") or "note"
+                bits.append(f"{update.get('task_key')}={status}")
+            summary = ", ".join(bits)
+        lines.append(f"- {case.get('message')!r} → {summary}")
+    return "\n".join(lines)
 
 
 def _format_task_line(t: dict) -> str:
@@ -127,8 +149,10 @@ async def run_coordinator(
         message_text=message_text,
     )
 
+    examples = _examples_text()
+    system = _SYSTEM_PROMPT if not examples else f"{_SYSTEM_PROMPT}\n\n{examples}"
     messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "system", "content": system},
         {"role": "user", "content": context},
     ]
 
