@@ -7,13 +7,17 @@ Inline-button callbacks: pq:<question_id>:<option_index>
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import html
 import json
 import logging
+import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 
 from telegram import BotCommand, ChatMember, Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.constants import ChatAction
 from telegram.error import Conflict
 from telegram.ext import (
     Application,
@@ -24,6 +28,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+from telegram.request import HTTPXRequest
 
 from app.config import settings
 from app.db import repo
@@ -106,6 +111,22 @@ def _escape(text: str) -> str:
     return html.escape(text)
 
 
+def personal(handler):
+    """
+    Commands that talk about one person's tasks (/mytasks, /next, /status, /done, ...).
+    In a group everyone would see the answer, so they only work in a private chat.
+    """
+    @functools.wraps(handler)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.effective_chat.type != "private":
+            await update.message.reply_text(
+                "That one is personal. Message me directly and I'll show only your own tasks."
+            )
+            return
+        await handler(update, context)
+    return wrapper
+
+
 # ── /start ────────────────────────────────────────────────────────────────────
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -144,9 +165,17 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
         # Onboard
-        await repo.onboard_participant(
-            db, participant["id"], chat_id=chat_id, onboarded_at=now
-        )
+        try:
+            await repo.onboard_participant(
+                db, participant["id"], chat_id=chat_id, onboarded_at=now
+            )
+        except sqlite3.IntegrityError:
+            current = await repo.get_participant_by_chat_id(db, chat_id)
+            await update.message.reply_text(
+                f"This Telegram account is already linked to {current['name']} in another project. "
+                "For now one account can join one project at a time.",
+            )
+            return
 
         tasks = await repo.list_tasks_for_owner(db, participant["id"])
         project = await repo.get_project(db, participant["project_id"])
@@ -190,6 +219,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # ── /mytasks ──────────────────────────────────────────────────────────────────
 
+@personal
 async def mytasks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     async with repo.db_context() as db:
@@ -213,6 +243,7 @@ async def mytasks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 # ── /next ─────────────────────────────────────────────────────────────────────
 
+@personal
 async def next_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from app.core.next_task import pick_next_task
     chat_id = update.effective_chat.id
@@ -234,12 +265,15 @@ async def next_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 # ── /status ───────────────────────────────────────────────────────────────────
 
+@personal
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     async with repo.db_context() as db:
         participant = await repo.get_participant_by_chat_id(db, chat_id)
-        project_id = participant["project_id"] if participant else _project_id
-        tasks = await repo.list_tasks(db, project_id)
+        if not participant:
+            await update.message.reply_text("You're not in this project. Use the invite link your lead shared.")
+            return
+        tasks = await repo.list_tasks(db, participant["project_id"])
     by_status = {}
     for t in tasks:
         by_status.setdefault(t["status"], []).append(t)
@@ -253,6 +287,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # ── /done ─────────────────────────────────────────────────────────────────────
 
+@personal
 async def done_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Explicit /done <key> — skips the LLM and still goes through the Policy Engine."""
     chat_id = update.effective_chat.id
@@ -278,11 +313,13 @@ async def done_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         telegram_message_id=update.message.message_id,
         sse_publish=_publish,
     )
-    await update.message.reply_text(reply, parse_mode="HTML")
+    if reply:
+        await update.message.reply_text(reply, parse_mode="HTML")
 
 
 # ── /undo ─────────────────────────────────────────────────────────────────────
 
+@personal
 async def undo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     now = await _now()
@@ -322,6 +359,7 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 # ── /blocked ──────────────────────────────────────────────────────────────────
 
+@personal
 async def blocked_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     args = context.args or []
@@ -347,7 +385,8 @@ async def blocked_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         sse_publish=_publish,
         blocker_description=reason,
     )
-    await update.message.reply_text(reply, parse_mode="HTML")
+    if reply:
+        await update.message.reply_text(reply, parse_mode="HTML")
 
 
 # ── Inline button callback ────────────────────────────────────────────────────
@@ -567,6 +606,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
+    # Show "typing..." straight away; the reply follows once the message has been understood.
+    asyncio.create_task(_typing(context.bot, chat_id))
     await handle_message(
         participant_id=participant["id"],
         project_id=participant["project_id"],
@@ -576,8 +617,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
+async def _typing(bot, chat_id: int) -> None:
+    try:
+        await bot.send_chat_action(chat_id, ChatAction.TYPING)
+    except Exception:
+        pass     # purely cosmetic
+
+
 # ── /pause ────────────────────────────────────────────────────────────────────
 
+@personal
 async def pause_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Stop reminders for a while. Replies to things you say still work."""
     async with repo.db_context() as db:
@@ -688,7 +737,18 @@ def build_application(project_id: int = 1, bot=None) -> Application:
     _project_id = project_id
 
     builder = Application.builder()
-    builder = builder.bot(bot) if bot is not None else builder.token(settings.telegram_bot_token)
+    if bot is not None:
+        builder = builder.bot(bot)
+    else:
+        builder = (
+            builder.token(settings.telegram_bot_token)
+            # Sending: patient, because a send that gives up early may still have been delivered.
+            .request(HTTPXRequest(connection_pool_size=8, connect_timeout=15, read_timeout=30,
+                                  write_timeout=30, pool_timeout=15))
+            # Long-polling for updates holds a request open on purpose.
+            .get_updates_request(HTTPXRequest(connection_pool_size=2, connect_timeout=15, read_timeout=40,
+                                              write_timeout=20, pool_timeout=15))
+        )
     app = builder.build()
 
     app.add_handler(CommandHandler("start", start_handler))

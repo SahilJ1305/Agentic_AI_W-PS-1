@@ -24,10 +24,16 @@ class FakeBot(ExtBot):
         self._sent: list[dict[str, Any]] = []        # underscore: PTB bots are frozen objects
         self._calls: list[tuple[str, dict]] = []
         self._ids = itertools.count(5000)
+        self._failures: list[Exception] = []          # errors to raise on the next sendMessage calls
+        self._attempts = 0                             # every sendMessage that reached the "network"
 
     @property
     def sent(self) -> list[dict[str, Any]]:
         return self._sent
+
+    @property
+    def attempts(self) -> int:
+        return self._attempts
 
     @property
     def calls(self) -> list[tuple[str, dict]]:
@@ -39,6 +45,9 @@ class FakeBot(ExtBot):
             return {"id": 4242, "is_bot": True, "first_name": "Cadence Test",
                     "username": "cadence_test_bot", "can_join_groups": True}
         if endpoint == "sendMessage":
+            self._attempts += 1
+            if self._failures:
+                raise self._failures.pop(0)
             message_id = next(self._ids)
             self._sent.append({
                 "chat_id": int(data["chat_id"]),
@@ -49,6 +58,10 @@ class FakeBot(ExtBot):
             return {"message_id": message_id, "date": int(time.time()),
                     "chat": {"id": int(data["chat_id"]), "type": "private"}, "text": data["text"]}
         return True
+
+    def fail_next(self, *errors: Exception) -> None:
+        """Make the next sendMessage calls fail with these errors, in order."""
+        self._failures.extend(errors)
 
     # ── reading what the bot said ─────────────────────────────────────────────
     def to(self, chat_id: int) -> list[dict]:

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -807,11 +808,35 @@ async def defer_outbox(db: aiosqlite.Connection, outbox_id: int, not_before: str
     )
 
 
+async def claim_outbox(db: aiosqlite.Connection, outbox_id: int, *, lease_until: str) -> bool:
+    """
+    Take a queued row before sending it: count the attempt and hide it until the lease ends,
+    so a crash or overlapping tick cannot send it again right away. False if someone else has it.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    cur = await db.execute(
+        """UPDATE outbox SET attempts = attempts + 1, not_before = ?
+           WHERE id = ? AND status = 'queued' AND (not_before IS NULL OR not_before <= ?)""",
+        (lease_until, outbox_id, now),
+    )
+    return cur.rowcount == 1
+
+
+async def release_outbox(
+    db: aiosqlite.Connection, outbox_id: int, *, not_before: str, error: str, refund_attempt: bool = False
+) -> None:
+    """Put a claimed row back in the queue to be retried at `not_before`."""
+    await db.execute(
+        "UPDATE outbox SET not_before = ?, error = ?, attempts = MAX(attempts - ?, 0) WHERE id = ?",
+        (not_before, error, 1 if refund_attempt else 0, outbox_id),
+    )
+
+
 async def mark_outbox_sent(
     db: aiosqlite.Connection, outbox_id: int, *, sent_message_id: int
 ) -> None:
     await db.execute(
-        "UPDATE outbox SET status = 'sent', sent_message_id = ?, attempts = attempts + 1 WHERE id = ?",
+        "UPDATE outbox SET status = 'sent', sent_message_id = ?, error = NULL WHERE id = ?",
         (sent_message_id, outbox_id),
     )
 

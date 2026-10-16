@@ -37,6 +37,23 @@ from app.telegram.gateway import (
 log = logging.getLogger(__name__)
 
 
+async def _warm_azure() -> None:
+    """Open the TLS connection and wake the deployment, so the first real reply is not the slow one."""
+    from app.llm import azure
+
+    if not (settings.azure_ai_endpoint and settings.azure_ai_api_key and settings.azure_coordinator_deployment):
+        return
+    try:
+        await azure.chat(
+            model=settings.azure_coordinator_deployment,
+            messages=[{"role": "user", "content": "Reply with the word ready."}],
+            timeout=30,
+        )
+        log.info("Azure coordinator deployment is warm")
+    except Exception as exc:        # warming is best effort
+        log.warning("Azure warm-up failed (the first reply may be slow): %s", exc)
+
+
 async def _warm_ollama() -> None:
     """Touch the tunnel so the coordinator model is loaded before the first reply."""
     from app.llm.ollama import OllamaError, chat, list_models
@@ -107,6 +124,7 @@ async def lifespan(app: FastAPI):
             settings.azure_coordinator_deployment or "unset",
             settings.azure_planner_deployment or "unset",
         )
+        asyncio.create_task(_warm_azure())
     else:
         asyncio.create_task(_warm_ollama())
     try:
@@ -129,9 +147,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Cadence", lifespan=lifespan)
+_origins = {settings.frontend_url.rstrip("/"), "http://localhost:5173", "http://127.0.0.1:5173"}
+_origins |= {o.strip().rstrip("/") for o in settings.cors_origins.split(",") if o.strip()}
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=sorted(_origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -151,4 +171,4 @@ async def dashboard():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app.main:app", host="127.0.0.1", port=8000)
+    uvicorn.run("app.main:app", host=settings.app_host, port=settings.app_port)

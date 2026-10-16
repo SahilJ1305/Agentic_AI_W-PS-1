@@ -49,54 +49,88 @@ async def run_escalations(db: aiosqlite.Connection, now: datetime | None = None)
 # ── silence ───────────────────────────────────────────────────────────────────
 
 async def _silence_ladder(db: aiosqlite.Connection, now: datetime, result: dict) -> None:
+    """
+    One rung per PERSON per pass. Someone with two open questions (say a check-in and an
+    unblock request about the same task) gets one reminder, not two; the oldest open question
+    sets the clock and the others move up the ladder with it.
+    """
     step = settings.effective_nudge_after_min
     cur = await db.execute(
-        """SELECT q.*, p.name AS person_name, p.project_id AS pid
-           FROM pending_questions q
+        """SELECT q.* FROM pending_questions q
            JOIN participants p ON p.id = q.participant_id
            JOIN projects pr ON pr.id = p.project_id
-           WHERE q.status = 'open' AND pr.status = 'active' AND p.telegram_chat_id IS NOT NULL
-           ORDER BY q.created_at"""
+           WHERE q.status = 'open' AND q.task_id IS NOT NULL
+             AND pr.status = 'active' AND p.telegram_chat_id IS NOT NULL
+           ORDER BY q.created_at, q.id"""
     )
-    for question in [dict(r) for r in await cur.fetchall()]:
-        created = parse_ts(question["created_at"])
-        person = await repo.get_participant(db, question["participant_id"])
-        task = await repo.get_task(db, question["task_id"]) if question.get("task_id") else None
-        if not created or not person or not task or task["status"] == "complete" or _paused(person, now):
+    by_person: dict[int, list[dict]] = {}
+    for row in cur_rows(await cur.fetchall()):
+        by_person.setdefault(row["participant_id"], []).append(row)
+
+    for person_id, questions in by_person.items():
+        person = await repo.get_participant(db, person_id)
+        if not person or _paused(person, now):
+            continue
+        # Questions about tasks that are already finished no longer need an answer.
+        open_questions = []
+        for q in questions:
+            task = await repo.get_task(db, q["task_id"])
+            if task and task["status"] != "complete":
+                open_questions.append((q, task))
+        if not open_questions:
+            continue
+
+        oldest, task = open_questions[0]
+        created = parse_ts(oldest["created_at"])
+        if not created:
             continue
         age_min = (now - created).total_seconds() / 60
-        rung = question["nudge_count"]
-        batch = NotificationBatch()
+        rung = oldest["nudge_count"]
+        ids = [q["id"] for q, _ in open_questions]
         ctx = {"task": task, "name": person["name"]}
         stamp = now.isoformat()
+        batch = NotificationBatch()
 
         if rung == 0 and age_min >= step:
-            batch.add(participant_id=person["id"], template_key="NUDGE_1", context=ctx,
-                      dedupe_key=f"nudge1:{question['id']}")
-            await repo.increment_nudge_count(db, question["id"])
+            batch.add(participant_id=person_id, template_key="NUDGE_1", context=ctx,
+                      dedupe_key=f"nudge1:{oldest['id']}")
+            await _set_rung(db, ids, 1)
             result["nudges"] += 1
         elif rung == 1 and age_min >= 2 * step:
-            lead = await repo.get_lead(db, question["pid"])
-            batch.add(participant_id=person["id"], template_key="NUDGE_2",
+            lead = await repo.get_lead(db, person["project_id"])
+            batch.add(participant_id=person_id, template_key="NUDGE_2",
                       context={**ctx, "lead": (lead or {}).get("name", "the lead"), "minutes": max(1, round(step))},
-                      dedupe_key=f"nudge2:{question['id']}")
-            await repo.increment_nudge_count(db, question["id"])
+                      dedupe_key=f"nudge2:{oldest['id']}")
+            await _set_rung(db, ids, 2)
             result["nudges"] += 1
         elif rung >= 2 and age_min >= 3 * step:
-            lead = await repo.get_lead(db, question["pid"])
-            await repo.escalate_question(db, question["id"])
-            await _flag(db, task, "stale", "No reply after 2 reminders", stamp)
-            if lead and lead["id"] != person["id"]:
+            lead = await repo.get_lead(db, person["project_id"])
+            for q in ids:
+                await repo.escalate_question(db, q)
+            for _, t in open_questions:
+                await _flag(db, t, "stale", "No reply after 2 reminders", stamp)
+            if lead and lead["id"] != person_id:
                 batch.add(participant_id=lead["id"], template_key="ESCALATE_SILENCE",
                           context={**ctx, "lead": lead["name"]},
-                          dedupe_key=f"escalate:{question['id']}")
+                          dedupe_key=f"escalate:{oldest['id']}")
             result["silence_alerts"] += 1
-            await broadcaster.publish("task.updated", {
-                "project_id": question["pid"], "task_key": task["key"], "status": task["status"],
-                "flags": json.loads((await repo.get_task(db, task["id"]))["flags_json"] or "[]"),
-                "reason": "No reply after 2 reminders", "rule_fired": "W10 escalation",
-            })
+            for _, t in open_questions:
+                fresh = await repo.get_task(db, t["id"])
+                await broadcaster.publish("task.updated", {
+                    "project_id": person["project_id"], "task_key": t["key"], "status": fresh["status"],
+                    "flags": json.loads(fresh["flags_json"] or "[]"),
+                    "reason": "No reply after 2 reminders", "rule_fired": "W10 escalation",
+                })
         await batch.flush(db, now=stamp)
+
+
+def cur_rows(rows) -> list[dict]:
+    return [dict(r) for r in rows]
+
+
+async def _set_rung(db: aiosqlite.Connection, question_ids: list[int], rung: int) -> None:
+    marks = ",".join("?" * len(question_ids))
+    await db.execute(f"UPDATE pending_questions SET nudge_count = ? WHERE id IN ({marks})", [rung, *question_ids])
 
 
 # ── blockers ──────────────────────────────────────────────────────────────────

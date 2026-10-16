@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 import aiosqlite
 
 from app.agents.coordinator import run_coordinator
+from app.agents.fastpath import quick_interpretation
 from app.config import settings
 from app.core.dependency_engine import on_blocker_raised, on_task_completed
 from app.core.notifications import NotificationBatch
@@ -193,18 +194,25 @@ async def _process_burst(
             })
             return
 
-        # ── Coordinator Agent ─────────────────────────────────────────────────
+        # ── Coordinator Agent (skipped for unambiguous one-word replies) ───────
+        fast = quick_interpretation(
+            burst_text, sender_tasks=enriched_sender_tasks, pending_question=open_pq,
+        )
         try:
-            interpretation = await run_coordinator(
-                now=now,
-                sender_name=sender["name"],
-                pending_question=open_pq,
-                sender_tasks=enriched_sender_tasks,
-                task_index=task_index,
-                recent_messages=recent,
-                message_text=burst_text,
-                db=db,
-            )
+            if fast is not None:
+                interpretation = fast
+                interpretation.raw_message = burst_text
+            else:
+                interpretation = await run_coordinator(
+                    now=now,
+                    sender_name=sender["name"],
+                    pending_question=open_pq,
+                    sender_tasks=enriched_sender_tasks,
+                    task_index=task_index,
+                    recent_messages=recent,
+                    message_text=burst_text,
+                    db=db,
+                )
         except LLMFailure as e:
             log.error("LLM failure for participant=%d: %s", participant_id, e)
             # R15 fallback: send buttons for most likely task
@@ -252,6 +260,8 @@ async def _process_burst(
             verifications=verifications,
         )
 
+        if fast is not None:
+            decision.rule_log.insert(0, "Fast path: a plain one-word status, so no AI call was needed")
         await db.commit()
         await sse_publish("interpretation", {
             "message_id": msg_id,
@@ -369,7 +379,7 @@ async def apply_explicit_status(
     blocker_resolved: bool = False,
     confirmed: frozenset[str] = frozenset(),
     question_id: int | None = None,
-) -> str:
+) -> str | None:
     """
     Apply a button or slash-command status through the Policy Engine, skipping the LLM.
 
@@ -437,10 +447,10 @@ async def apply_explicit_status(
             await _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_publish)
         await decision.notifications.flush(db, now=now, source_msg_id=msg_id)
         await db.commit()
-    if decision.approved and decision.approved[0].new_status:
-        return f"{task_key} is now {decision.approved[0].new_status}."
-    if decision.clarifications:
-        return "I need one more detail before I change that task."
+    # Success, a clarifying question and the acknowledgement all reach the person through the
+    # outbox. Replying here as well is what made /done answer twice.
+    if decision.approved or decision.clarifications or decision.notifications._messages:
+        return None
     return f"No change recorded for {task_key}."
 
 

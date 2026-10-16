@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     secret_key: str = ""                      # SECRET_KEY: same value the backend signs JWTs with
     frontend_url: str = "http://localhost:5173"
 
+    # ---- Web server -------------------------------------------------
+    app_host: str = "127.0.0.1"             # 0.0.0.0 inside a container
+    app_port: int = 8000
+    cors_origins: str = ""                  # extra allowed website origins, comma separated
+
     # ---- Storage ----------------------------------------------------
     database_path: str = "./data/cadence.db"
     timezone: str = "Asia/Kolkata"
@@ -65,7 +70,7 @@ class Settings(BaseSettings):
     risk_blocked_min: int = 120
     quiet_min: float = 10.0
     undo_window_min: int = 30
-    debounce_s: float = 4.0
+    debounce_s: float = 1.5            # wait this long for a person's follow-up line before reading
 
     clarify_threshold: float = 0.6
     edge_auto_accept: float = 0.8
