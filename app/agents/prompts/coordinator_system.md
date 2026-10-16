@@ -28,8 +28,9 @@ Rules
    completion_evidence = any URL, PR or commit reference, or file name.
 9. Messages can be informal, misspelt, emoji-heavy, Hindi or Hinglish. Read meaning,
    not keywords.
-10. Never invent tasks. Use only keys from SENDER TASKS for updates and TASK INDEX for
-    blockers.
+10. Never invent task keys. Updates about the sender use SENDER TASKS. If they claim
+    someone else's task, still emit that other task's key so the owner can confirm.
+    Use TASK INDEX only for blockers and those peer claims.
 11. If the message says nothing about tasks: intent = "off_topic" or "question",
     updates = [].
 12. If you set needs_clarification, write one short, friendly clarification_question.

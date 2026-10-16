@@ -52,13 +52,26 @@ BUTTONS: dict[str, list[str]] = {
 }
 
 
-def build_inline_keyboard(template_key: str, question_id: int) -> str:
+def buttons_for(template_key: str, context: dict | None = None) -> list[str]:
+    """Fixed buttons, or one button per open task for CLARIFY_TASK."""
+    if template_key == "CLARIFY_TASK":
+        labels = []
+        for task in (context or {}).get("tasks") or []:
+            if task.get("status") == "complete":
+                continue
+            label = f"{task.get('key', '')} {task.get('title', '')}".strip()
+            labels.append(label[:40])
+        return labels + ["None of these"]
+    return list(BUTTONS.get(template_key, []))
+
+
+def build_inline_keyboard(template_key: str, question_id: int, context: dict | None = None) -> str:
     """
     Build inline keyboard JSON for a template.
     Callback data format: pq:<question_id>:<option_index>
     Telegram limits callback_data to 64 bytes.
     """
-    buttons = BUTTONS.get(template_key, [])
+    buttons = buttons_for(template_key, context)
     if not buttons:
         return json.dumps([])
     keyboard = [
@@ -246,8 +259,9 @@ class NotificationBatch:
 
             # Build buttons
             buttons_json: str | None = None
-            if pq_id and msg.template_key in BUTTONS:
-                buttons_json = build_inline_keyboard(msg.template_key, pq_id)
+            labels = buttons_for(msg.template_key, ctx)
+            if pq_id and labels:
+                buttons_json = build_inline_keyboard(msg.template_key, pq_id, ctx)
 
             outbox_id = await repo.enqueue_message(
                 db,

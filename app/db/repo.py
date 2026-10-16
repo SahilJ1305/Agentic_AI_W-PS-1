@@ -295,6 +295,8 @@ async def update_task_status(
     flags_json: str | None = None,
     completed_at: str | None = None,
     last_reply_at: str | None = None,
+    owner_id: int | None = None,
+    deadline: str | None = None,
     updated_at: str,
     expected_version: int | None = None,
 ) -> bool:
@@ -324,6 +326,12 @@ async def update_task_status(
     if last_reply_at is not None:
         sets.append("last_reply_at = ?")
         params.append(last_reply_at)
+    if owner_id is not None:
+        sets.append("owner_id = ?")
+        params.append(owner_id)
+    if deadline is not None:
+        sets.append("deadline = ?")
+        params.append(deadline)
 
     params.append(task_id)
     where = "id = ?"
@@ -709,6 +717,24 @@ async def fetch_queued_messages(
         (now, limit),
     )
     return _rows(await cur.fetchall())
+
+
+async def last_outbox_sent_at(db: aiosqlite.Connection, chat_id: int) -> str | None:
+    cur = await db.execute(
+        """SELECT created_at FROM outbox
+           WHERE chat_id = ? AND status = 'sent'
+           ORDER BY created_at DESC LIMIT 1""",
+        (chat_id,),
+    )
+    row = await cur.fetchone()
+    return row["created_at"] if row else None
+
+
+async def defer_outbox(db: aiosqlite.Connection, outbox_id: int, not_before: str) -> None:
+    await db.execute(
+        "UPDATE outbox SET not_before = ? WHERE id = ?",
+        (not_before, outbox_id),
+    )
 
 
 async def mark_outbox_sent(

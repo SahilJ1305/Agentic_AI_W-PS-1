@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -30,6 +31,11 @@ from app.db import repo
 from app.llm.gateway import LLMFailure
 
 log = logging.getLogger(__name__)
+
+_BARE_DONE = re.compile(
+    r"^(done+|ho gaya|hogaya|ho gya|hogya|ho gaya bhai|hogaya bhai)[\s!.]*$",
+    re.IGNORECASE,
+)
 
 # Per-user lock registry
 _user_locks: dict[int, asyncio.Lock] = {}
@@ -157,6 +163,26 @@ async def _process_burst(
                 row["blocker_desc"] = blockers[0]["description"] if blockers else ""
             enriched_sender_tasks.append(row)
 
+        open_tasks = [t for t in enriched_sender_tasks if t["status"] != "complete"]
+        if not open_pq and len(open_tasks) > 1 and _BARE_DONE.match(burst_text.strip()):
+            log.info("Ambiguous done from %s across %d tasks", sender["name"], len(open_tasks))
+            batch = NotificationBatch()
+            batch.add(
+                participant_id=participant_id,
+                template_key="CLARIFY_TASK",
+                context={"tasks": open_tasks, "_source_text": burst_text},
+                question_kind="clarify_task",
+            )
+            await batch.flush(db, now=now, source_msg_id=msg_id)
+            await db.commit()
+            await sse_publish("interpretation", {
+                "message_id": msg_id,
+                "intent": "status_update",
+                "decision": ["G2.2: bare done with several open tasks → CLARIFY_TASK"],
+                "updates": [],
+            })
+            return
+
         # ── Coordinator Agent ─────────────────────────────────────────────────
         try:
             interpretation = await run_coordinator(
@@ -215,6 +241,17 @@ async def _process_burst(
             "updates": [u.task_key for u in decision.approved],
         })
 
+        if decision.revert:
+            await _revert_latest(
+                db,
+                sender,
+                now=now,
+                reason=burst_text,
+                sse_publish=sse_publish,
+            )
+            await db.commit()
+            return
+
         # ── Close pending question if answered ────────────────────────────────
         if open_pq and decision.approved:
             await repo.close_question(db, open_pq["id"], answered_at=now)
@@ -225,6 +262,78 @@ async def _process_burst(
 
         # ── Flush notification batch ──────────────────────────────────────────
         await decision.notifications.flush(db, now=now, source_msg_id=msg_id)
+
+
+async def _revert_latest(db, sender: dict, *, now: str, reason: str, sse_publish) -> str:
+    """Undo the sender's newest status change inside UNDO_WINDOW_MIN."""
+    tasks = await repo.list_tasks_for_owner(db, sender["id"])
+    last_event = None
+    last_task = None
+    for task in tasks:
+        event = await repo.get_latest_event(db, task["id"], actor="coordinator")
+        if event and event["event_type"] == "status_changed" and not event.get("reverted_by_event_id"):
+            if last_event is None or event["created_at"] > last_event["created_at"]:
+                last_event = event
+                last_task = task
+    if not last_event or not last_task or not last_event.get("old_value"):
+        return "Nothing to undo."
+
+    event_dt = datetime.fromisoformat(last_event["created_at"])
+    if event_dt.tzinfo is None:
+        event_dt = event_dt.replace(tzinfo=timezone.utc)
+    age_min = (datetime.now(timezone.utc) - event_dt).total_seconds() / 60
+    if age_min > settings.undo_window_min:
+        return f"Undo window ({settings.undo_window_min} min) expired."
+
+    restored = last_event["old_value"]
+    await repo.update_task_status(db, last_task["id"], status=restored, updated_at=now)
+    revert_id = await repo.append_task_event(
+        db,
+        task_id=last_task["id"],
+        event_type="reverted",
+        old_value=last_event["new_value"],
+        new_value=restored,
+        reason=reason,
+        actor="coordinator",
+        now=now,
+    )
+    await repo.mark_event_reverted(db, last_event["id"], revert_event_id=revert_id)
+    await recompute_readiness_quietly(db, last_task["project_id"], now)
+    if last_event["new_value"] == "complete" and restored != "complete":
+        await _notify_reopened(db, last_task, reason, now)
+    await sse_publish("task.updated", {
+        "task_key": last_task["key"],
+        "status": restored,
+        "reason": reason,
+        "rule_fired": "undo",
+    })
+    return f"Undone: {last_task['title']} is back to {restored}."
+
+
+async def recompute_readiness_quietly(db, project_id: int, now: str) -> None:
+    from app.core.dependency_engine import recompute_all_readiness
+    await recompute_all_readiness(project_id, db, now)
+
+
+async def _notify_reopened(db, task: dict, reason: str, now: str) -> None:
+    downstream = await repo.list_dependencies_upstream(db, task["id"], state="active")
+    batch = NotificationBatch()
+    for edge in downstream:
+        if edge["type"] != "hard":
+            continue
+        down = await repo.get_task(db, edge["downstream_task_id"])
+        if not down or not down.get("owner_id"):
+            continue
+        batch.add(
+            participant_id=down["owner_id"],
+            template_key="REOPENED_ALERT",
+            context={
+                "upstream_task": task,
+                "task": down,
+                "reason": reason,
+            },
+        )
+    await batch.flush(db, now=now)
 
 
 async def apply_explicit_status(

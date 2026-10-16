@@ -88,5 +88,8 @@ NOT_UNDERSTOOD:
 OFF_TOPIC:
   text: "I only keep track of project tasks. Send /mytasks to see yours."
 
+OVERRIDE_NOTICE:
+  text: "{lead} set <b>{task_key} · {task_title}</b> to {status}. {reason}"
+
 MILESTONE_DONE:
   text: "Milestone <b>{milestone}</b> is complete! {done}/{total} tasks done overall."

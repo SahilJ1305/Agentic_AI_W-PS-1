@@ -24,9 +24,9 @@ from telegram.ext import (
 
 from app.config import settings
 from app.db import repo
-from app.core.notifications import BUTTONS
+from app.core.notifications import buttons_for
 from app.telegram.keyboards import parse_callback
-from app.telegram.router import apply_explicit_status, handle_message
+from app.telegram.router import _revert_latest, apply_explicit_status, handle_message
 
 log = logging.getLogger(__name__)
 
@@ -222,62 +222,19 @@ async def done_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def undo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     now = await _now()
-
     async with repo.db_context() as db:
         participant = await repo.get_participant_by_chat_id(db, chat_id)
         if not participant:
             await update.message.reply_text("You're not in this project.")
             return
-
-        # Find the most recent status_changed event from this participant
-        tasks = await repo.list_tasks_for_owner(db, participant["id"])
-        last_event = None
-        last_task = None
-        for t in tasks:
-            ev = await repo.get_latest_event(db, t["id"], actor="coordinator")
-            if ev and ev["event_type"] == "status_changed":
-                if last_event is None or ev["created_at"] > last_event["created_at"]:
-                    last_event = ev
-                    last_task = t
-
-        if not last_event or not last_task:
-            await update.message.reply_text("Nothing to undo.")
-            return
-
-        # Check undo window
-        import datetime as dt_mod
-        event_dt = dt_mod.datetime.fromisoformat(last_event["created_at"])
-        now_dt = dt_mod.datetime.now(dt_mod.timezone.utc)
-        age_min = (now_dt - event_dt).total_seconds() / 60
-        if age_min > settings.undo_window_min:
-            await update.message.reply_text(
-                f"Undo window ({settings.undo_window_min} min) expired."
-            )
-            return
-
-        # Revert: create a new event and restore old status
-        reverted_status = last_event["old_value"]
-        await repo.update_task_status(
-            db, last_task["id"],
-            status=reverted_status,
-            updated_at=now,
-        )
-        revert_event_id = await repo.append_task_event(
+        reply = await _revert_latest(
             db,
-            task_id=last_task["id"],
-            event_type="reverted",
-            old_value=last_event["new_value"],
-            new_value=reverted_status,
-            reason=f"Reverted by /undo",
-            actor="coordinator",
+            participant,
             now=now,
+            reason="Reverted by /undo",
+            sse_publish=_publish,
         )
-        await repo.mark_event_reverted(db, last_event["id"], revert_event_id=revert_event_id)
-
-    await update.message.reply_text(
-        f"Undone: <b>{last_task['title']}</b> is back to {reverted_status}.",
-        parse_mode="HTML",
-    )
+    await update.message.reply_text(reply, parse_mode="HTML")
 
 
 # ── /help ─────────────────────────────────────────────────────────────────────
@@ -351,7 +308,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except json.JSONDecodeError:
             payload = {}
         template_key = payload.get("_template_key", "")
-        buttons = BUTTONS.get(template_key, ["Done", "In progress", "Blocked"])
+        buttons = buttons_for(template_key, payload) or ["Done", "In progress", "Blocked"]
         cb = parse_callback(data, buttons)
         if cb is None:
             return
@@ -363,7 +320,32 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "In progress": "in_progress",
         "Blocked": "blocked",
         "Not started": "pending",
+        "Yes it works": "complete",
+        "Not fully": "in_progress",
     }
+    if option_text == "Yes" and payload.get("_claimed_status") and task:
+        status_from_button = {**status_from_button, "Yes": payload["_claimed_status"]}
+    if option_text == "None of these":
+        await query.message.reply_text("Okay, I won't change a task.")
+        return
+    chosen_key = option_text.split()[0].upper() if option_text else ""
+    if task is None and chosen_key.startswith("T") and chosen_key[1:].isdigit():
+        source = str(payload.get("_source_text") or option_text)
+        reply = await apply_explicit_status(
+            participant_id=participant["id"],
+            project_id=participant["project_id"],
+            task_key=chosen_key,
+            status="complete",
+            text=source,
+            telegram_message_id=query.message.message_id,
+            sse_publish=_publish,
+        )
+        await query.message.reply_text(reply)
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
+    if option_text == "No" and payload.get("_template_key") == "PEER_CLAIM_CONFIRM":
+        await query.message.reply_text("Left that task unchanged.")
+        return
     if task and option_text in status_from_button:
         await apply_explicit_status(
             participant_id=participant["id"],

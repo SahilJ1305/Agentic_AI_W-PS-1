@@ -99,6 +99,22 @@
         <div id="feed" class="feed"></div>
       </section>
       <section class="panel">
+        <h2>Lead override</h2>
+        <form id="override-form">
+          <select id="override-task"></select>
+          <select id="override-status">
+            <option value="pending">Pending</option>
+            <option value="in_progress">In progress</option>
+            <option value="blocked">Blocked</option>
+            <option value="complete">Complete</option>
+          </select>
+          <select id="override-owner"></select>
+          <input id="override-reason" placeholder="Reason" required />
+          <button type="submit">Save override</button>
+          <p class="muted" id="override-note"></p>
+        </form>
+      </section>
+      <section class="panel">
         <h2>Upload a spec</h2>
         <form id="upload-form">
           <input id="project-field" placeholder="New project name" />
@@ -118,6 +134,8 @@
     ];
     let projectId = null;
     let source = null;
+    let latestTasks = [];
+    let latestPeople = [];
 
     function esc(value) {
       return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -150,9 +168,12 @@
       const counts = summary.task_counts || {};
       document.getElementById("summary").textContent =
         `${summary.total_tasks} tasks · ${counts.complete || 0} complete · ${counts.blocked || 0} blocked · ${summary.open_blockers} open blockers`;
+      latestTasks = tasks;
+      latestPeople = people;
       renderBoard(tasks);
       renderPeople(people);
       renderFeed(events);
+      renderOverride(tasks, people);
     }
 
     function renderBoard(tasks) {
@@ -179,6 +200,21 @@
           pushLocal("Follow-up queued.");
         });
       });
+    }
+
+    function renderOverride(tasks, people) {
+      const taskSelect = document.getElementById("override-task");
+      const ownerSelect = document.getElementById("override-owner");
+      const previous = taskSelect.value;
+      taskSelect.innerHTML = tasks.map((task) =>
+        `<option value="${task.id}">${esc(task.key)} · ${esc(task.title)}</option>`
+      ).join("");
+      if (previous) taskSelect.value = previous;
+      ownerSelect.innerHTML = `<option value="">Keep owner</option>` + people.map((person) =>
+        `<option value="${person.id}">${esc(person.name)}</option>`
+      ).join("");
+      const selected = tasks.find((task) => String(task.id) === taskSelect.value) || tasks[0];
+      if (selected) document.getElementById("override-status").value = selected.status;
     }
 
     function renderPeople(people) {
@@ -216,6 +252,27 @@
         source.addEventListener(name, onChange);
       });
     }
+
+    document.getElementById("override-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const note = document.getElementById("override-note");
+      const task = latestTasks.find((item) => String(item.id) === document.getElementById("override-task").value);
+      if (!task) return;
+      const ownerValue = document.getElementById("override-owner").value;
+      const response = await fetch(`/api/tasks/${task.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: document.getElementById("override-status").value,
+          owner_id: ownerValue ? Number(ownerValue) : null,
+          reason: document.getElementById("override-reason").value,
+          expected_version: task.version,
+        }),
+      });
+      const body = await response.json();
+      note.textContent = response.ok ? "Saved. The owner is notified if they are on Telegram." : (body.detail || "Override failed.");
+      if (response.ok) await refresh();
+    });
 
     document.getElementById("checkin").addEventListener("click", async () => {
       if (!projectId) return;

@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     def effective_quiet_min(self) -> float:
         return 0.5 if self.demo_mode else self.quiet_min
 
+    @field_validator("telegram_group_chat_id", mode="before")
+    @classmethod
+    def empty_group_chat_is_none(cls, value):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
+
     @field_validator("clarify_threshold", "edge_auto_accept", "runtime_edge_min")
     @classmethod
     def must_be_0_to_1(cls, v: float) -> float:

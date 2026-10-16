@@ -29,6 +29,31 @@ from app.scheduler.jobs import start_scheduler, stop_scheduler
 from app.telegram.gateway import build_application, set_sse_publish
 
 log = logging.getLogger(__name__)
+
+
+async def _warm_ollama() -> None:
+    """Touch the tunnel so the coordinator model is loaded before the first reply."""
+    from app.llm.ollama import OllamaError, chat, list_models
+
+    if not settings.coordinator_model:
+        log.warning("COORDINATOR_MODEL is empty. Ollama replies cannot be interpreted.")
+        return
+    try:
+        models = await list_models()
+        log.info("Ollama is up. Models: %s", ", ".join(models) or "(none)")
+        await chat(
+            model=settings.coordinator_model,
+            messages=[{"role": "user", "content": "Reply with the word ready."}],
+            think=False,
+            num_ctx=512,
+            timeout=30,
+        )
+        log.info("Warmed coordinator model %s", settings.coordinator_model)
+    except OllamaError as exc:
+        log.warning(
+            "Ollama is not reachable (%s). Start the tunnel with: ssh -fN ollama-server",
+            exc,
+        )
 _DASHBOARD = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
 
 
@@ -67,6 +92,7 @@ async def lifespan(app: FastAPI):
         log.warning("TELEGRAM_BOT_TOKEN is empty. Dashboard is live; the bot is not polling.")
 
     start_scheduler()
+    asyncio.create_task(_warm_ollama())
     try:
         yield
     finally:

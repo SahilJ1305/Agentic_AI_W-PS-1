@@ -81,6 +81,8 @@ async def patch_task(tid: int, req: PatchTaskRequest):
             db,
             tid,
             status=req.status or task["status"],
+            owner_id=req.owner_id,
+            deadline=req.deadline,
             updated_at=now,
             expected_version=req.expected_version,
         )
@@ -90,13 +92,28 @@ async def patch_task(tid: int, req: PatchTaskRequest):
         await repo.append_task_event(
             db,
             task_id=tid,
-            event_type="override",
+            event_type="owner_changed" if req.owner_id and req.owner_id != task.get("owner_id") else "override",
             old_value=task["status"],
             new_value=req.status or task["status"],
             reason=req.reason,
             actor="lead",
             now=now,
         )
+        owner_id = req.owner_id or task.get("owner_id")
+        if owner_id:
+            from app.core.notifications import NotificationBatch
+            batch = NotificationBatch()
+            batch.add(
+                participant_id=owner_id,
+                template_key="OVERRIDE_NOTICE",
+                context={
+                    "task": {**task, "key": task["key"], "title": task["title"]},
+                    "status": req.status or task["status"],
+                    "reason": req.reason,
+                    "lead": "The lead",
+                },
+            )
+            await batch.flush(db, now=now)
 
         if req.status == "complete" and task["status"] != "complete":
             from app.core.dependency_engine import on_task_completed

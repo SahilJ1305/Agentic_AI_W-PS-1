@@ -52,6 +52,7 @@ class PolicyDecision:
     notifications: NotificationBatch = field(default_factory=NotificationBatch)
     clarifications: list[dict] = field(default_factory=list)  # pending questions to create
     rule_log: list[str] = field(default_factory=list)         # for the "why" panel
+    revert: bool = False
 
 
 async def apply(
@@ -102,10 +103,10 @@ async def apply(
             )
         return decision
 
-    # Correction intent
+    # Correction intent — revert the sender's latest status change. No new status is applied.
     if interpretation.intent == "correction":
-        decision.rule_log.append("R9(correction): undo last status change")
-        # Corrections are handled by the router using /undo logic; nothing more here.
+        decision.rule_log.append("correction: revert the sender's latest status change")
+        decision.revert = True
         return decision
 
     # If the LLM said needs_clarification from the start
@@ -163,9 +164,31 @@ async def _apply_update(
             decision.rule_log.append(f"R14: answering pending question {open_pq['kind']} for {pq_task['key']}")
             update.task_key = pq_task["key"]
 
-    # R1: Unknown task key or not in sender's tasks
+    # R1 / R5: unknown key, or a claim about someone else's task
     task = sender_task_map.get(update.task_key)
     if not task:
+        other = None
+        if update.task_key:
+            other = await repo.get_task_by_key(db, project_id, update.task_key)
+        if other and other.get("owner_id") and other["owner_id"] != sender["id"]:
+            decision.rule_log.append(
+                f"R5: {sender['name']} claimed {other['key']} owned by someone else → PEER_CLAIM_CONFIRM"
+            )
+            decision.notifications.add(
+                participant_id=other["owner_id"],
+                template_key="PEER_CLAIM_CONFIRM",
+                context={
+                    "reporter": sender["name"],
+                    "task_title": other["title"],
+                    "claimed_status": update.status or "updated",
+                    "task": other,
+                    "_claimed_status": update.status or "complete",
+                },
+                question_kind="confirm_peer_claim",
+                question_task_id=other["id"],
+            )
+            decision.clarifications.append({"kind": "confirm_peer_claim", "task_id": other["id"]})
+            return
         decision.rule_log.append(f"R1: task_key={update.task_key} not in sender's tasks → CLARIFY_TASK")
         _add_clarify_task(decision, sender, list(sender_task_map.values()), source_message_id)
         return
@@ -194,10 +217,7 @@ async def _apply_update(
         decision.rule_log.append(f"R4: complete+blocker → forced to blocked (Kabir rule)")
         update.status = "blocked"
 
-    # R5: Sender reports someone else's task (not in their task list)
-    # Already handled by R1 — if they reference a key not in their tasks, clarify.
-
-    # R6: complete while a hard upstream is incomplete → dependency_conflict
+    # R6: complete while a hard upstream is incomplete → ask before completing
     if update.status == "complete":
         conflict_task = await _check_dependency_conflict(task, db)
         if conflict_task:
@@ -214,20 +234,6 @@ async def _apply_update(
                 question_task_id=task["id"],
             )
             decision.clarifications.append({"kind": "dependency_conflict", "task_id": task["id"]})
-            # Still approve as complete with dependency_conflict flag
-            flags = json.loads(task.get("flags_json", "[]"))
-            flags.append("dependency_conflict")
-            decision.approved.append(ApprovedUpdate(
-                task_id=task["id"],
-                task_key=task["key"],
-                new_status="complete",
-                old_status=task["status"],
-                flags_to_add=["dependency_conflict"],
-                completion_evidence=update.completion_evidence,
-                reason="Completed with dependency conflict — awaiting confirmation",
-                rule_fired="R6",
-                confidence=update.status_confidence,
-            ))
             return
 
     # R7: complete on requires_evidence task without evidence
