@@ -21,6 +21,7 @@ from app.agents.schemas import Interpretation, TaskUpdate
 from app.config import settings
 from app.db import repo
 from app.core.notifications import NotificationBatch
+from app.tools.git_checker import GitVerification
 
 log = logging.getLogger(__name__)
 
@@ -35,12 +36,14 @@ class ApprovedUpdate:
     progress_note: str | None = None
     eta: str | None = None
     completion_evidence: str | None = None
+    verified: bool | None = None          # None = leave tasks.verified unchanged
     blocker_description: str | None = None
     blocker_kind: str | None = None
     blocker_linked_task_id: int | None = None
     blocker_linked_participant_id: int | None = None
     blocker_resolved: bool = False
     flags_to_add: list[str] = field(default_factory=list)
+    flags_to_remove: list[str] = field(default_factory=list)
     reason: str = ""
     rule_fired: str = ""
     confidence: float = 1.0
@@ -62,10 +65,14 @@ async def apply(
     source_message_id: int,
     db: aiosqlite.Connection,
     now: str,
+    verifications: dict[str, GitVerification] | None = None,
 ) -> PolicyDecision:
     """
     Run rules R1–R16 in order against the Interpretation.
     Returns a PolicyDecision. Does NOT write to the DB.
+
+    `verifications` holds Git claim checker results keyed by task key
+    (app/tools/git_checker.verify_updates); rules R7a/R7b use them.
     """
     decision = PolicyDecision()
 
@@ -126,6 +133,7 @@ async def apply(
             db=db,
             now=now,
             decision=decision,
+            verifications=verifications or {},
         )
 
     # If nothing was approved and nothing was clarified, send NOT_UNDERSTOOD
@@ -154,6 +162,7 @@ async def _apply_update(
     db: aiosqlite.Connection,
     now: str,
     decision: PolicyDecision,
+    verifications: dict[str, GitVerification],
 ) -> None:
     """Apply rules R1–R16 to a single TaskUpdate."""
 
@@ -234,6 +243,15 @@ async def _apply_update(
                 question_task_id=task["id"],
             )
             decision.clarifications.append({"kind": "dependency_conflict", "task_id": task["id"]})
+            return
+
+    # R7a / R7b: the Git claim checker looked for the sender's commit or PR
+    check = verifications.get(task["key"])
+    claims_done = update.status == "complete" or (
+        update.status is None and task["status"] == "complete"
+    )
+    if check and claims_done:
+        if await _apply_git_check(check, update, task, sender, decision, db):
             return
 
     # R7: complete on requires_evidence task without evidence
@@ -366,6 +384,83 @@ async def _apply_update(
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
+
+async def _apply_git_check(
+    check: GitVerification,
+    update: TaskUpdate,
+    task: dict,
+    sender: dict,
+    decision: PolicyDecision,
+    db: aiosqlite.Connection,
+) -> bool:
+    """
+    Decide a completion claim from a Git checker result. Returns True if it did.
+
+    R7a  verified                          → complete, verified, evidence = commit/PR URL
+    R7b  author_mismatch (any task), or
+         weak_match/not_found on a task
+         that requires evidence            → complete but unverified, ask for a link;
+                                             a mismatch also tells the lead
+    Anything else (skipped, error, or a miss on a task that doesn't need evidence)
+    falls through to R7 and the normal path, so a GitHub outage never blocks a reply.
+    """
+    if check.is_verified:
+        decision.rule_log.append(f"R7a: git check verified {task['key']} → {check.evidence_url}")
+        decision.approved.append(ApprovedUpdate(
+            task_id=task["id"],
+            task_key=task["key"],
+            new_status="complete",
+            old_status=task["status"],
+            progress_note=update.progress_note,
+            completion_evidence=check.evidence_url or update.completion_evidence,
+            verified=True,
+            flags_to_remove=["needs_verification"],
+            reason=f"Verified on GitHub: {check.reason}",
+            rule_fired="R7a",
+            confidence=update.status_confidence,
+        ))
+        return True
+
+    disputed = check.status == "author_mismatch"
+    if not (disputed or (check.checked and task.get("requires_evidence"))):
+        decision.rule_log.append(
+            f"git check {check.status} for {task['key']} ({check.reason}) → not required, continuing"
+        )
+        return False
+
+    decision.rule_log.append(f"R7b: git check {check.status} for {task['key']} → needs_verification")
+    decision.notifications.add(
+        participant_id=sender["id"],
+        template_key="GIT_UNVERIFIED",
+        context={"task": task, "reason": check.reason},
+        question_kind="verify_completion",
+        question_task_id=task["id"],
+    )
+    decision.clarifications.append({"kind": "verify_completion", "task_id": task["id"]})
+    if disputed:
+        lead = await repo.get_lead(db, task["project_id"])
+        if lead and lead["id"] != sender["id"]:
+            decision.notifications.add(
+                participant_id=lead["id"],
+                template_key="GIT_CLAIM_MISMATCH",
+                context={"task": task, "reporter": sender["name"], "reason": check.reason},
+                dedupe_key=f"git_mismatch:{task['id']}:{check.evidence_url or check.status}",
+            )
+    decision.approved.append(ApprovedUpdate(
+        task_id=task["id"],
+        task_key=task["key"],
+        new_status="complete",
+        old_status=task["status"],
+        progress_note=update.progress_note,
+        completion_evidence=update.completion_evidence,
+        verified=False,
+        flags_to_add=["needs_verification"],
+        reason=f"Completed, not confirmed on GitHub: {check.reason}",
+        rule_fired="R7b",
+        confidence=update.status_confidence,
+    ))
+    return True
+
 
 def _add_clarify_task(
     decision: PolicyDecision,

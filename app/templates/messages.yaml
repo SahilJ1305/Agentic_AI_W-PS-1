@@ -64,6 +64,12 @@ ASK_BLOCKER:
 VERIFY_COMPLETION:
   text: "Great! Can you share a link for <b>{task_title}</b> (PR, commit, demo URL or file)? I've marked it Complete (unverified) until then."
 
+GIT_UNVERIFIED:
+  text: "I couldn't confirm <b>{task_title}</b> on GitHub: {reason}. Can you share the commit or PR link? I've marked it Complete (unverified) until then."
+
+GIT_CLAIM_MISMATCH:
+  text: "Heads up: {reporter} marked <b>{task_key} · {task_title}</b> done, but {reason}. It's flagged as unverified."
+
 DEPENDENCY_CONFLICT:
   text: "You said <b>{task_title}</b> is done, but it depends on <b>{upstream_title}</b>, which is still {upstream_status}. Is it fully working end-to-end?"
 

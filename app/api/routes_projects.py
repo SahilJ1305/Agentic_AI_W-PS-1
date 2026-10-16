@@ -358,6 +358,11 @@ class CreateParticipantRequest(BaseModel):
     role: str = "member"
     skills: str | None = None
     telegram_username: str | None = None
+    github_username: str | None = None
+
+
+class UpdateParticipantRequest(BaseModel):
+    github_username: str | None = None
 
 
 @router.post("/{pid}/participants")
@@ -378,6 +383,21 @@ async def add_participant(
             skills=req.skills,
             invite_code=secrets.token_urlsafe(12),
             telegram_username=(req.telegram_username or "").lstrip("@") or None,
+            github_username=(req.github_username or "").strip().lstrip("@") or None,
+        )
+        participant = await repo.get_participant(db, participant_id)
+    return _with_invite(participant)
+
+
+@router.patch("/{pid}/participants/{participant_id}")
+async def update_participant(pid: int, participant_id: int, req: UpdateParticipantRequest):
+    """Link a participant to their GitHub account for the Git claim checker."""
+    async with repo.db_context() as db:
+        participant = await repo.get_participant(db, participant_id)
+        if not participant or participant["project_id"] != pid:
+            raise HTTPException(404, "Participant not found")
+        await repo.set_participant_github(
+            db, participant_id, (req.github_username or "").strip().lstrip("@") or None
         )
         participant = await repo.get_participant(db, participant_id)
     return _with_invite(participant)

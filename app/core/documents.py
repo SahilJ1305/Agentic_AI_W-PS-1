@@ -94,6 +94,9 @@ def parse_team(spec_text: str) -> list[dict[str, str]]:
                 "telegram_username": (
                     row.get("telegram_username") or row.get("telegram") or ""
                 ).strip().lstrip("@"),
+                "github_username": (
+                    row.get("github_username") or row.get("github") or ""
+                ).strip().lstrip("@"),
             })
     return people
 
@@ -201,6 +204,7 @@ async def ensure_participants_from_spec(
             skills=person["skills"] or None,
             invite_code=secrets.token_urlsafe(12),
             telegram_username=person["telegram_username"] or None,
+            github_username=person["github_username"] or None,
         )
         created += 1
     return created

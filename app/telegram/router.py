@@ -29,6 +29,7 @@ from app.core.notifications import NotificationBatch
 from app.core.policy import apply as policy_apply
 from app.db import repo
 from app.llm.gateway import LLMFailure
+from app.tools.git_checker import verify_updates
 
 log = logging.getLogger(__name__)
 
@@ -223,6 +224,14 @@ async def _process_burst(
             "updates": [u.model_dump() for u in interpretation.updates],
         })
 
+        # ── Git claim checker: look for the sender's commit/PR behind "done" ──
+        verifications = await verify_updates(
+            interpretation,
+            sender=sender,
+            sender_tasks=sender_tasks,
+            open_question=open_pq,
+        )
+
         # ── Policy Engine ─────────────────────────────────────────────────────
         decision = await policy_apply(
             interpretation=interpretation,
@@ -231,6 +240,7 @@ async def _process_burst(
             source_message_id=msg_id,
             db=db,
             now=now,
+            verifications=verifications,
         )
 
         await db.commit()
@@ -239,6 +249,7 @@ async def _process_burst(
             "intent": interpretation.intent,
             "decision": decision.rule_log,
             "updates": [u.task_key for u in decision.approved],
+            "git_checks": {key: v.model_dump(mode="json") for key, v in verifications.items()},
         })
 
         if decision.revert:
@@ -382,6 +393,11 @@ async def apply_explicit_status(
             text=text,
             now=now,
         )
+        verifications = await verify_updates(
+            interpretation,
+            sender=sender,
+            sender_tasks=await repo.list_tasks_for_owner(db, participant_id),
+        )
         decision = await policy_apply(
             interpretation=interpretation,
             sender=sender,
@@ -389,6 +405,7 @@ async def apply_explicit_status(
             source_message_id=msg_id,
             db=db,
             now=now,
+            verifications=verifications,
         )
         open_pq = await repo.get_open_question(db, participant_id)
         if open_pq and decision.approved:
@@ -414,6 +431,7 @@ async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_
     for f in upd.flags_to_add:
         if f not in flags:
             flags.append(f)
+    flags = [f for f in flags if f not in upd.flags_to_remove]
 
     completion_at = now if upd.new_status == "complete" else None
     last_reply_at = now
@@ -426,6 +444,7 @@ async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_
             progress_note=upd.progress_note,
             eta=upd.eta,
             completion_evidence=upd.completion_evidence,
+            verified=upd.verified,
             flags_json=json.dumps(flags),
             completed_at=completion_at,
             last_reply_at=last_reply_at,
@@ -475,6 +494,19 @@ async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_
             confidence=upd.confidence,
             now=now,
         )
+
+    if upd.verified:
+        verified_event_id = await repo.append_task_event(
+            db,
+            task_id=upd.task_id,
+            event_type="verified",
+            new_value=upd.completion_evidence,
+            reason=upd.reason,
+            actor="engine",
+            source_message_id=msg_id,
+            now=now,
+        )
+        event_id = event_id or verified_event_id
 
     # Handle blocker
     if upd.blocker_description and upd.new_status == "blocked":
@@ -573,7 +605,9 @@ async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_
         "status": (fresh or task)["status"],
         "readiness": (fresh or task)["readiness"],
         "flags": json.loads((fresh or task).get("flags_json") or "[]"),
-        "changed_fields": ["status"] if upd.new_status else ["progress_note"],
+        "verified": bool((fresh or task).get("verified")),
+        "changed_fields": (["status"] if upd.new_status else ["progress_note"])
+                          + (["verified"] if upd.verified is not None else []),
         "event_id": event_id,
         "reason": upd.reason,
         "rule_fired": upd.rule_fired,

@@ -73,6 +73,17 @@ class Settings(BaseSettings):
 
     personalise_followups: bool = False
 
+    # ---- Git claim checker (app/tools/git_checker.py) ---------------
+    github_repo: str = ""                   # "owner/repo"; empty disables the checker
+    github_token: str = ""                  # optional for public repos (60 req/h without)
+    github_api_url: str = "https://api.github.com"
+    github_timeout_s: float = 8.0
+    git_check_grace_hours: float = 24.0     # count work from this long before the task existed
+
+    @property
+    def git_check_enabled(self) -> bool:
+        return bool(self.github_repo.strip())
+
     # ---- Demo-mode overrides ----------------------------------------
     @property
     def effective_nudge_after_min(self) -> float:
