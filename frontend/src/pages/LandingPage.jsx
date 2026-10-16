@@ -12,7 +12,7 @@ const LandingPage = () => {
           <div className="bg-blue-600 text-white p-2 rounded-xl shadow-md shadow-blue-500/20">
             <Sparkles className="h-5 w-5" />
           </div>
-          <span className="text-xl font-bold tracking-tight text-slate-900">AppPortal</span>
+          <span className="text-xl font-bold tracking-tight text-slate-900">Cadence</span>
         </div>
 
         <div className="flex items-center gap-4">
@@ -34,15 +34,15 @@ const LandingPage = () => {
       {/* --- Hero Section --- */}
       <main className="flex-1 flex flex-col items-center justify-center text-center px-6 pt-12 pb-20 max-w-5xl mx-auto">
         <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 text-xs font-semibold mb-6">
-          <Sparkles className="w-3.5 h-3.5" /> Fast & Secure Authentication Platform
+          <Sparkles className="w-3.5 h-3.5" /> AI group project coordinator
         </div>
 
         <h1 className="text-4xl sm:text-6xl font-extrabold text-slate-900 tracking-tight leading-tight mb-6">
-          Streamline your workflow with <span className="text-blue-600">modern tools.</span>
+          Stop chasing your team <span className="text-blue-600">for updates.</span>
         </h1>
 
         <p className="text-lg text-slate-600 max-w-2xl mb-10 leading-relaxed">
-          Access your personal workspace, manage account configurations, and review analytics with real-time speed.
+          Cadence checks in with each teammate on Telegram, reads their replies, and keeps the task board current.
         </p>
 
         {/* --- Primary Call To Action --- */}
@@ -69,31 +69,31 @@ const LandingPage = () => {
             <div className="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl flex items-center justify-center mb-4">
               <Zap className="w-5 h-5" />
             </div>
-            <h3 className="font-bold text-slate-900 mb-1">Instant Access</h3>
-            <p className="text-sm text-slate-500">Sign in securely using token-based authentication session storage.</p>
+            <h3 className="font-bold text-slate-900 mb-1">Follow-ups on Telegram</h3>
+            <p className="text-sm text-slate-500">One check-in per teammate covering the tasks they own.</p>
           </div>
 
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
             <div className="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl flex items-center justify-center mb-4">
               <ShieldCheck className="w-5 h-5" />
             </div>
-            <h3 className="font-bold text-slate-900 mb-1">Password Recovery</h3>
-            <p className="text-sm text-slate-500">Built-in 6-digit OTP verification flow for resetting lost credentials.</p>
+            <h3 className="font-bold text-slate-900 mb-1">Blocked, not “done”</h3>
+            <p className="text-sm text-slate-500">“Connected, but waiting for credentials” is recorded as a blocker.</p>
           </div>
 
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
             <div className="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl flex items-center justify-center mb-4">
               <LayoutDashboard className="w-5 h-5" />
             </div>
-            <h3 className="font-bold text-slate-900 mb-1">Unified Dashboard</h3>
-            <p className="text-sm text-slate-500">View performance metrics and platform activities in real-time.</p>
+            <h3 className="font-bold text-slate-900 mb-1">Live board</h3>
+            <p className="text-sm text-slate-500">Every change shows up with the reason it happened.</p>
           </div>
         </div>
       </main>
 
       {/* --- Simple Footer --- */}
       <footer className="border-t border-slate-200 py-6 text-center text-xs text-slate-400">
-        &copy; {new Date().getFullYear()} AppPortal. All rights reserved.
+        &copy; {new Date().getFullYear()} Cadence.
       </footer>
     </div>
   );
