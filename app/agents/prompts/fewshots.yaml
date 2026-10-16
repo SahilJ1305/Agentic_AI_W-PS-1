@@ -1,0 +1,307 @@
+# Few-shot examples for the Coordinator Agent
+# Loaded by app/agents/coordinator.py and appended as user/assistant turns
+# before the actual message to interpret.
+# Source: spec §17.2 (starter cases 1–20)
+
+cases:
+
+  - id: 1
+    description: "Classic Kabir blocker — API connected but waiting for credentials"
+    sender_tasks:
+      - key: T3
+        title: Connect the payment API
+        status: pending
+        deadline: "2026-10-17T20:00:00+05:30"
+        blocker: null
+    pending_question: "status_check for T3"
+    task_index:
+      - "T1 Set up backend and database (Rohan, complete)"
+      - "T2 Set up payment gateway sandbox account (Rohan, pending)"
+    message: "The API is connected, but I am waiting for test credentials."
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T3
+          status: blocked
+          blocker:
+            description: "waiting for test credentials"
+            kind: task
+            suspected_task_key: T2
+            match_confidence: 0.85
+
+  - id: 2
+    description: "Blocker resolved — got credentials, testing now"
+    sender_tasks:
+      - key: T3
+        title: Connect the payment API
+        status: blocked
+        blocker: "waiting for test credentials"
+    message: "got the creds from Rohan, testing now"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T3
+          status: in_progress
+          blocker_resolved: true
+
+  - id: 3
+    description: "Task complete with evidence (PR reference)"
+    sender_tasks:
+      - key: T3
+        title: Connect the payment API
+        status: in_progress
+    message: "tested end to end, all working. PR #42"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T3
+          status: complete
+          completion_evidence: "PR #42"
+
+  - id: 4
+    description: "Hedged completion — low confidence should trigger R3/R6"
+    sender_tasks:
+      - key: T5
+        title: Integrate checkout UI with payment API
+        status: pending
+    message: "I think the integration is already done?"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T5
+          status: complete
+          status_confidence: 0.55  # ≤ 0.6
+
+  - id: 5
+    description: "Hinglish ETA — kal subah tak ho jayega"
+    sender_tasks:
+      - key: T4
+        title: Build checkout UI
+        status: in_progress
+    message: "almost done, kal subah tak ho jayega"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T4
+          status: in_progress
+          # eta should be next morning ~10:00 IST
+
+  - id: 6
+    description: "Ambiguous done — pending question wins"
+    sender_tasks:
+      - key: T4
+        title: Build checkout UI
+        status: in_progress
+      - key: T5
+        title: Integrate checkout UI with payment API
+        status: pending
+    pending_question: "status_check for T4"
+    message: "done"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T4
+          status: complete
+          task_match_confidence: 0.9
+
+  - id: 7
+    description: "Ambiguous done — no pending question, two open tasks → low confidence"
+    sender_tasks:
+      - key: T4
+        title: Build checkout UI
+        status: in_progress
+      - key: T5
+        title: Integrate checkout UI with payment API
+        status: pending
+    message: "done"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T4  # or T5 — either way task_match_confidence ≤ 0.5
+          task_match_confidence: 0.45
+
+  - id: 8
+    description: "Two tasks updated in one message"
+    sender_tasks:
+      - key: T7
+        title: Record demo video
+        status: pending
+      - key: T8
+        title: Final testing and submission
+        status: pending
+    message: "video recorded, submission after Meera's part"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T7
+          status: complete
+        - task_key: T8
+          status: pending  # progress note only, no status change
+
+  - id: 9
+    description: "Correction intent — undo a completion"
+    sender_tasks:
+      - key: T3
+        title: Connect the payment API
+        status: complete
+    message: "actually ignore that, it's not done yet"
+    expected:
+      intent: correction
+      updates:
+        - task_key: T3
+          status: in_progress
+
+  - id: 10
+    description: "Off-topic message — no task updates"
+    sender_tasks:
+      - key: T3
+        title: Connect the payment API
+        status: in_progress
+    message: "bro what time is dinner"
+    expected:
+      intent: off_topic
+      updates: []
+
+  - id: 11
+    description: "Peer claim — Meera says Kabir's task is done"
+    sender_tasks:
+      - key: T4
+        title: Build checkout UI
+        status: in_progress
+      - key: T5
+        title: Integrate checkout UI with payment API
+        status: pending
+    task_index:
+      - "T3 Connect the payment API (Kabir, in_progress)"
+    message: "Kabir's API is done btw"
+    expected:
+      intent: status_update
+      updates: []  # no updates to Meera's tasks; R5 handles T3 claim
+
+  - id: 12
+    description: "External blocker — gateway 401 error"
+    sender_tasks:
+      - key: T3
+        title: Connect the payment API
+        status: in_progress
+    message: "stuck, gateway keeps throwing 401"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T3
+          status: blocked
+          blocker:
+            kind: external
+            description: "gateway throwing 401 errors"
+
+  - id: 13
+    description: "Person-kind blocker — waiting on Rohan"
+    sender_tasks:
+      - key: T3
+        title: Connect the payment API
+        status: in_progress
+    message: "waiting on Rohan"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T3
+          status: blocked
+          blocker:
+            kind: person
+            suspected_person: Rohan
+
+  - id: 14
+    description: "Not started with a reason (note only)"
+    sender_tasks:
+      - key: T4
+        title: Build checkout UI
+        status: pending
+    message: "not started yet, was busy with assignments"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T4
+          status: pending
+          progress_note: "not started yet, was busy with assignments"
+
+  - id: 15
+    description: "Vague — kinda working → low status_confidence"
+    sender_tasks:
+      - key: T4
+        title: Build checkout UI
+        status: in_progress
+    message: "kinda working?"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T4
+          status: in_progress
+          status_confidence: 0.45  # ≤ 0.6 → CLARIFY_STATUS
+
+  - id: 16
+    description: "Done except testing → in_progress, not complete"
+    sender_tasks:
+      - key: T3
+        title: Connect the payment API
+        status: in_progress
+    message: "done except testing"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T3
+          status: in_progress
+
+  - id: 17
+    description: "Handoff request due to illness"
+    sender_tasks:
+      - key: T4
+        title: Build checkout UI
+        status: in_progress
+    message: "can't do it, fever. can someone take it?"
+    expected:
+      intent: handoff_request
+      updates: []
+
+  - id: 18
+    description: "Two tasks — slides done, video ETA in one message"
+    sender_tasks:
+      - key: T6
+        title: Prepare pitch slides
+        status: in_progress
+      - key: T7
+        title: Record demo video
+        status: pending
+    message: "slides final ✅ video shoot at 9"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T6
+          status: complete
+        - task_key: T7
+          status: in_progress  # or pending with note
+
+  - id: 19
+    description: "Hinglish completion — hogaya bhai 🔥"
+    sender_tasks:
+      - key: T3
+        title: Connect the payment API
+        status: in_progress
+    message: "hogaya bhai 🔥"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T3
+          status: complete
+
+  - id: 20
+    description: "Mixed — done then immediately walked back"
+    sender_tasks:
+      - key: T3
+        title: Connect the payment API
+        status: in_progress
+    message: "Done!! wait no, the webhook isn't firing"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T3
+          status: blocked  # or in_progress; NOT complete
