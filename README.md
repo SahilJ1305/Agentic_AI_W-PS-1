@@ -42,19 +42,39 @@ a reverse proxy with HTTPS in front for real use. Back up the `cadence_data` vol
 GitHub Actions (`.github/workflows/ci.yml`) runs the tests and builds every image on each push, so
 nothing needs to be run locally to know the code is healthy.
 
-### Develop on your own machine
+### Run it on your own machine (teammates)
 
-You can run the dashboard and API without the bot: leave `TELEGRAM_BOT_TOKEN` empty.
+Everyone can run the whole project independently from a fresh clone. You need **Python 3.11+** and
+**Node 20+**; Docker is optional. Your copy has its own database, its own logins and its own bot (or none).
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -r requirements.txt     # Windows: .venv\Scripts\...
-DB_PORT=5433 docker compose up -d db backend      # login service (use DB_PORT if 5432 is taken)
-.venv/bin/python -m app.db.seed_demo              # optional: the FestPass demo project
-.venv/bin/python -m app.main                      # API on :8000
-cd frontend && npm install && npm run dev         # dashboard on :5173
+git clone https://github.com/SahilJ1305/Cadence.git && cd Cadence
+python -m venv .venv                                   # Windows: .venv\Scriptsctivate
+.venv/bin/pip install -r requirements.txt              # Windows: .venv\Scripts\pip ...
+.venv/bin/python -m scripts.init_env                   # creates your .env with fresh secrets
 ```
 
-Want to try the bot too? Create **your own** bot in @BotFather and use its token only in your `.env`.
+Then start the three pieces (each in its own terminal):
+
+| Piece | With Docker | Without Docker |
+|---|---|---|
+| Login service (:8001) | `DB_PORT=5433 docker compose up -d db backend` (skip `DB_PORT` unless 5432 is taken) | `python -m scripts.init_env --no-docker`, then `pip install -r backend/requirements.txt` and `cd backend && uvicorn main:app --port 8001` |
+| Cadence API (:8000) | `python -m app.db.seed_demo` (optional demo project), then `python -m app.main` | same |
+| Dashboard (:5173) | `cd frontend && npm install && npm run dev` | same |
+
+Open http://localhost:5173, sign up with any email, and you will see the demo project. To check your
+setup without starting anything: `python -m pytest -q` (49 tests, no keys or bot needed).
+
+What you can and cannot do without secrets:
+
+| You have | You get |
+|---|---|
+| Nothing extra | The dashboard, API, demo project, every test |
+| An AI key (ask the project owner through a password manager, or use your own) | The bot understands free-text replies and the planner turns a spec into tasks. Without it the bot falls back to button questions, and one-word replies like "done" still work |
+| **Your own** Telegram bot (free, from @BotFather) | The live bot on your machine. Never use the team bot's token on a laptop |
+
+The team's bot runs on the server only. Two copies sharing a token answer every message twice.
+Your `.env` is git-ignored. Never commit it, and never copy someone else's.
 
 ### Create the Telegram bot (2 minutes, a person has to do this)
 
