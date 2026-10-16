@@ -1,4 +1,4 @@
-"""Check-in schedule. Nudges, escalations and digests are Tier 3."""
+"""Scheduler: check-ins, the escalation ladder, and the daily digest."""
 from __future__ import annotations
 
 import logging
@@ -6,9 +6,12 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import settings
 from app.core.checkins import queue_checkins
+from app.core.escalation import run_escalations
+from app.core.reports import generate_report
 from app.db import repo
 
 log = logging.getLogger(__name__)
@@ -28,9 +31,26 @@ def start_scheduler() -> AsyncIOScheduler:
         )
     except Exception:
         log.exception("Follow-up cron %r was not scheduled", settings.followup_cron)
+    try:
+        scheduler.add_job(
+            run_digests_all,
+            CronTrigger.from_crontab(settings.digest_cron, timezone=settings.timezone),
+            id="digest",
+            replace_existing=True,
+        )
+    except Exception:
+        log.exception("Digest cron %r was not scheduled", settings.digest_cron)
+    scheduler.add_job(
+        run_escalation_pass,
+        IntervalTrigger(seconds=15 if settings.demo_mode else 60),
+        id="escalations",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
     _scheduler = scheduler
-    log.info("Scheduler started (follow-ups: %s)", settings.followup_cron)
+    log.info("Scheduler started (follow-ups: %s, digest: %s)", settings.followup_cron, settings.digest_cron)
     return scheduler
 
 
@@ -58,6 +78,38 @@ async def run_checkins_all() -> int:
     return targeted
 
 
-async def run_nudge_checks() -> None:
-    """Fast-forward hook used by POST /api/admin/tick. Runs check-ins now."""
+async def run_escalation_pass() -> dict:
+    """Nudge silent people and escalate stale blockers across active projects."""
+    totals = {"nudges": 0, "silence_alerts": 0, "blocker_reminders": 0, "blocker_alerts": 0}
+    try:
+        async with repo.db_context() as db:
+            totals = await run_escalations(db)
+    except Exception:
+        log.exception("Escalation pass failed")
+    if any(totals.values()):
+        log.info("Escalations: %s", totals)
+    return totals
+
+
+async def run_digests_all() -> int:
+    """Post the digest for every active project (to the group chat and the lead)."""
+    async with repo.db_context() as db:
+        cursor = await db.execute("SELECT id FROM projects WHERE status = 'active' ORDER BY id")
+        project_ids = [row["id"] for row in await cursor.fetchall()]
+    posted = 0
+    for project_id in project_ids:
+        try:
+            async with repo.db_context() as db:
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                report = await generate_report(db, project_id, "digest", post=True, dedupe=today)
+            posted += report["posted"]
+        except Exception:
+            log.exception("Digest failed for project %s", project_id)
+    log.info("Digests posted for %d project(s)", posted)
+    return posted
+
+
+async def run_nudge_checks() -> dict:
+    """Fast-forward hook used by POST /api/admin/tick: run due check-ins and escalations now."""
     await run_checkins_all()
+    return await run_escalation_pass()

@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 import aiosqlite
 
 from app.config import settings
-from app.core.dependency_engine import recompute_all_readiness
+from app.core.dependency_engine import compute_critical_path, recompute_all_readiness
 from app.db import repo
 
 _STATUSES = {
@@ -326,4 +326,5 @@ async def import_task_document(
             dependencies += 1
 
     await recompute_all_readiness(project_id, db, now)
+    await compute_critical_path(project_id, db, now)
     return {"tasks": len(task_ids), "dependencies": dependencies}

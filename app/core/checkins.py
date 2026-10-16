@@ -25,6 +25,16 @@ async def queue_checkins(
         if task["status"] in ("in_progress", "blocked")
         or (task["status"] == "pending" and task["readiness"] == "ready")
     ]
+    # Pressing "Check in with everyone" twice, or the schedule firing while a check-in is still
+    # unanswered, must not stack a second identical question on the person.
+    cur = await db.execute(
+        """SELECT DISTINCT q.task_id FROM pending_questions q
+           JOIN tasks t ON t.id = q.task_id
+           WHERE t.project_id = ? AND q.status = 'open' AND q.kind = 'status_check'""",
+        (project_id,),
+    )
+    already_asked = {row["task_id"] for row in await cur.fetchall()}
+    chaseable = [task for task in chaseable if task["id"] not in already_asked]
     if task_keys:
         wanted = set(task_keys)
         chaseable = [task for task in chaseable if task["key"] in wanted]

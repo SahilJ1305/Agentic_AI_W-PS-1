@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 import aiosqlite
 
 from app.agents.coordinator import run_coordinator
+from app.agents.fastpath import quick_interpretation
 from app.config import settings
 from app.core.dependency_engine import on_blocker_raised, on_task_completed
 from app.core.notifications import NotificationBatch
@@ -44,6 +45,13 @@ _user_locks: dict[int, asyncio.Lock] = {}
 # Debounce buffers: participant_id → list of (text, tg_msg_id)
 _debounce_buffers: dict[int, list[tuple[str, int]]] = {}
 _debounce_tasks: dict[int, asyncio.Task] = {}
+
+
+def _tagged(sse_publish, project_id: int):
+    """Wrap an SSE publisher so every event says which project it belongs to."""
+    async def publish(event: str, payload: dict) -> None:
+        await sse_publish(event, {"project_id": project_id, **payload})
+    return publish
 
 
 def _get_lock(participant_id: int) -> asyncio.Lock:
@@ -120,6 +128,7 @@ async def _process_burst(
     last_telegram_message_id: int,
     sse_publish,
 ) -> None:
+    sse_publish = _tagged(sse_publish, project_id)
     now_dt = datetime.now(timezone.utc)
     now = now_dt.isoformat()
 
@@ -143,6 +152,7 @@ async def _process_burst(
         )
         await db.commit()
         await sse_publish("message.in", {
+            "message_id": msg_id,
             "participant": sender["name"],
             "text": burst_text[:100],
         })
@@ -184,18 +194,25 @@ async def _process_burst(
             })
             return
 
-        # ── Coordinator Agent ─────────────────────────────────────────────────
+        # ── Coordinator Agent (skipped for unambiguous one-word replies) ───────
+        fast = quick_interpretation(
+            burst_text, sender_tasks=enriched_sender_tasks, pending_question=open_pq,
+        )
         try:
-            interpretation = await run_coordinator(
-                now=now,
-                sender_name=sender["name"],
-                pending_question=open_pq,
-                sender_tasks=enriched_sender_tasks,
-                task_index=task_index,
-                recent_messages=recent,
-                message_text=burst_text,
-                db=db,
-            )
+            if fast is not None:
+                interpretation = fast
+                interpretation.raw_message = burst_text
+            else:
+                interpretation = await run_coordinator(
+                    now=now,
+                    sender_name=sender["name"],
+                    pending_question=open_pq,
+                    sender_tasks=enriched_sender_tasks,
+                    task_index=task_index,
+                    recent_messages=recent,
+                    message_text=burst_text,
+                    db=db,
+                )
         except LLMFailure as e:
             log.error("LLM failure for participant=%d: %s", participant_id, e)
             # R15 fallback: send buttons for most likely task
@@ -243,6 +260,8 @@ async def _process_burst(
             verifications=verifications,
         )
 
+        if fast is not None:
+            decision.rule_log.insert(0, "Fast path: a plain one-word status, so no AI call was needed")
         await db.commit()
         await sse_publish("interpretation", {
             "message_id": msg_id,
@@ -357,10 +376,19 @@ async def apply_explicit_status(
     telegram_message_id: int,
     sse_publish,
     blocker_description: str | None = None,
-) -> str:
-    """Apply a button or slash-command status through the Policy Engine, skipping the LLM."""
+    blocker_resolved: bool = False,
+    confirmed: frozenset[str] = frozenset(),
+    question_id: int | None = None,
+) -> str | None:
+    """
+    Apply a button or slash-command status through the Policy Engine, skipping the LLM.
+
+    `confirmed` lists rules the person just said yes to ("R6" it works end to end, "R8" reopen);
+    `question_id` is the pending question the button belonged to, closed once the update lands.
+    """
     from app.agents.schemas import BlockerOut, Interpretation, TaskUpdate
 
+    sse_publish = _tagged(sse_publish, project_id)
     now = datetime.now(timezone.utc).isoformat()
     blocker = None
     if status == "blocked" and blocker_description:
@@ -373,6 +401,7 @@ async def apply_explicit_status(
             status=status,  # type: ignore[arg-type]
             status_confidence=1.0,
             blocker=blocker,
+            blocker_resolved=blocker_resolved,
             evidence=text,
         )],
         raw_message=text,
@@ -406,19 +435,53 @@ async def apply_explicit_status(
             db=db,
             now=now,
             verifications=verifications,
+            confirmed=confirmed,
         )
-        open_pq = await repo.get_open_question(db, participant_id)
-        if open_pq and decision.approved:
+        open_pq = (
+            await repo.get_question(db, question_id) if question_id
+            else await repo.get_open_question(db, participant_id)
+        )
+        if open_pq and open_pq["status"] == "open" and decision.approved:
             await repo.close_question(db, open_pq["id"], answered_at=now)
         for upd in decision.approved:
             await _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_publish)
         await decision.notifications.flush(db, now=now, source_msg_id=msg_id)
         await db.commit()
-    if decision.approved and decision.approved[0].new_status:
-        return f"{task_key} is now {decision.approved[0].new_status}."
-    if decision.clarifications:
-        return "I need one more detail before I change that task."
+    # Success, a clarifying question and the acknowledgement all reach the person through the
+    # outbox. Replying here as well is what made /done answer twice.
+    if decision.approved or decision.clarifications or decision.notifications._messages:
+        return None
     return f"No change recorded for {task_key}."
+
+
+async def _acknowledge(upd, task: dict, db, now: str, msg_id: int | None) -> None:
+    """Confirm the new status to the person who reported it (completion is acknowledged by the engine)."""
+    if not upd.new_status or upd.new_status == upd.old_status or not task.get("owner_id"):
+        return
+    batch = NotificationBatch()
+    if upd.new_status == "in_progress":
+        batch.add(participant_id=task["owner_id"], template_key="ACK_PROGRESS", context={"task": task})
+    elif upd.new_status == "blocked":
+        routing = "I'll flag it to the lead."
+        if upd.blocker_linked_task_id:
+            linked = await repo.get_task(db, upd.blocker_linked_task_id)
+            helper = await repo.get_participant(db, linked["owner_id"]) if linked and linked.get("owner_id") else None
+            if helper:
+                routing = f"I've asked {helper['name']}."
+        elif upd.blocker_linked_participant_id:
+            helper = await repo.get_participant(db, upd.blocker_linked_participant_id)
+            if helper:
+                routing = f"I've asked {helper['name']}."
+        batch.add(
+            participant_id=task["owner_id"],
+            template_key="ACK_BLOCKED",
+            context={
+                "task": task,
+                "blocker": {"description": upd.blocker_description or "no reason given"},
+                "routing_part": routing,
+            },
+        )
+    await batch.flush(db, now=now, source_msg_id=msg_id)
 
 
 async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_publish):
@@ -579,7 +642,9 @@ async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_
                 source_message_id=msg_id,
                 now=now,
             )
-            await sse_publish("blocker.resolved", {"task_id": upd.task_id})
+            await sse_publish("blocker.resolved", {
+                "blocker_id": blocker["id"], "task_id": upd.task_id, "task_key": upd.task_key,
+            })
 
     # Completing a task closes the blocker that was holding it.
     if upd.new_status == "complete" and upd.old_status != "complete":
@@ -599,6 +664,7 @@ async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_
         await batch.flush(db, now=now, source_msg_id=msg_id)
 
     fresh = await repo.get_task(db, upd.task_id)
+    await _acknowledge(upd, fresh or task, db, now, msg_id)
     await db.commit()
     await sse_publish("task.updated", {
         "task_key": upd.task_key,

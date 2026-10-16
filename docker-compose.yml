@@ -11,7 +11,7 @@ services:
       POSTGRES_PASSWORD: cadence
       POSTGRES_DB: cadence
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5432}:5432"          # set DB_PORT=5433 if something already uses 5432
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

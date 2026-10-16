@@ -1,0 +1,70 @@
+# Run Cadence on a server (one command, nothing on anyone's laptop):
+#
+#   cp .env.example .env        # fill it in; see README "Deploy"
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# IMPORTANT: Telegram lets only ONE program poll a bot token. Run exactly one `cadence`
+# container, and do not put this bot's token in any other .env (laptops, CI, other servers).
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cadence
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: cadence
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cadence -d cadence"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Sign-up and login. Signs the JWTs the Cadence API trusts (shared SECRET_KEY).
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://cadence:${POSTGRES_PASSWORD}@db:5432/cadence
+    ports:
+      - "8001:8001"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # The bot, the scheduler and the API the dashboard talks to. Keep it to ONE replica.
+  cadence:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP_HOST: 0.0.0.0
+      DATABASE_PATH: /srv/data/cadence.db
+    volumes:
+      - cadence_data:/srv/data          # the SQLite file lives here: back this volume up
+    ports:
+      - "8000:8000"
+
+  # The dashboard. The two API addresses are compiled in at build time.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        VITE_AUTH_API_URL: ${PUBLIC_AUTH_API_URL:-http://localhost:8001}
+        VITE_CADENCE_API_URL: ${PUBLIC_CADENCE_API_URL:-http://localhost:8000}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - cadence
+      - backend
+
+volumes:
+  pgdata:
+  cadence_data:

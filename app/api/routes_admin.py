@@ -63,7 +63,9 @@ async def health():
     else:
         result["opencode"] = {"status": "not configured"}
 
-    result["telegram"] = "polling"
+    from app.telegram.gateway import telegram_status
+
+    result["telegram"] = telegram_status()
     return result
 
 
@@ -84,17 +86,25 @@ async def run_checkin(req: CheckinRequest, user: CurrentUser = Depends(current_u
     return {"status": "queued", "tasks_targeted": sent}
 
 
+def _demo_only() -> None:
+    from app.config import settings
+
+    if not settings.demo_mode:
+        raise HTTPException(403, "This is a demo-only action. Set DEMO_MODE=true to enable it.")
+
+
 @router.post("/admin/tick")
 async def tick():
     """Fast-forward scheduler (for demos)."""
+    _demo_only()
     from app.scheduler.jobs import run_nudge_checks
-    await run_nudge_checks()
-    return {"status": "ticked"}
+    return {"status": "ticked", "escalations": await run_nudge_checks()}
 
 
 @router.post("/admin/reset-demo")
 async def reset_demo():
     """Drop and reseed the FestPass demo project. Keeps telegram_chat_ids."""
+    _demo_only()
     from app.db.seed_demo import seed
     await seed(force=True)
     return {"status": "reset"}

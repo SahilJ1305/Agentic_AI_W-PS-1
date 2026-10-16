@@ -130,22 +130,23 @@ def render_template(template_key: str, context: dict) -> str:
     participant = context.get("participant", {})
 
     replacements = {
-        "{name}":            _esc(participant.get("name", context.get("name", ""))),
+        # An explicit context name (the person being talked about) beats the recipient's.
+        "{name}":            _esc(context.get("name") or participant.get("name", "")),
         "{project}":         _esc(context.get("project", "the project")),
         "{task_key}":        _esc(task.get("key", "")),
-        "{task_title}":      _esc(task.get("title", "")),
+        # Callers pass either a task dict or flat task_title / upstream_* keys.
+        "{task_title}":      _esc(task.get("title") or context.get("task_title", "")),
         "{deadline_rel}":    _rel(task.get("deadline")),
         "{task_list}":       _esc(context.get("task_list", "")),
         "{numbered_task_list}": _esc(context.get("numbered_task_list", "")),
-        "{upstream_title}":  _esc(upstream.get("title", "")),
+        "{upstream_title}":  _esc(upstream.get("title") or context.get("upstream_title", "")),
         "{upstream_owner}":  _esc(context.get("upstream_owner", "")),
-        "{upstream_status}": _esc(upstream.get("status", "")),
+        "{upstream_status}": _esc(upstream.get("status") or context.get("upstream_status", "")),
         "{next_key}":        _esc(next_task.get("key", "")) if next_task else "",
         "{next_title}":      _esc(next_task.get("title", "")) if next_task else "",
         "{next_deadline_rel}": _rel(next_task.get("deadline")) if next_task else "",
         "{blocker}":         _esc(blocker.get("description", context.get("blocker_desc", ""))),
         "{unblocker}":       _esc(context.get("unblocker", "")),
-        "{upstream_title}":  _esc(upstream.get("title", "")),
         "{lead}":            _esc(context.get("lead", "the lead")),
         "{status}":          _esc(context.get("status", "")),
         "{eta_part}":        f", ETA {_esc(task.get('eta'))}" if task.get("eta") else "",
