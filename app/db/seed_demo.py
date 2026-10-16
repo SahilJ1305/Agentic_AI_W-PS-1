@@ -189,6 +189,7 @@ async def seed(force: bool = False) -> None:
                 skills=p["skills"],
                 invite_code=code,
                 telegram_username=saved.get("telegram_username"),
+                github_username=saved.get("github_username"),
             )
             if saved.get("telegram_chat_id"):
                 await repo.onboard_participant(

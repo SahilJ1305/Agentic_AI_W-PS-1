@@ -47,6 +47,7 @@ BUTTONS: dict[str, list[str]] = {
     "PEER_CLAIM_CONFIRM":   ["Yes", "No"],
     "CONFIRM_REOPEN":       ["Yes reopen", "No keep it done"],
     "VERIFY_COMPLETION":    ["No link"],
+    "GIT_UNVERIFIED":       ["No link"],
     "UNBLOCK_REQUEST":      ["Working on it", "Already done", "Not mine"],
     "NOT_UNDERSTOOD":       ["Done", "In progress", "Blocked", "Different task"],
 }
