@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS participants (
   skills            TEXT,                          -- comma-separated
   telegram_chat_id  INTEGER UNIQUE,                -- set on /start
   telegram_username TEXT,
+  github_username   TEXT,                          -- for the Git claim checker
   invite_code       TEXT NOT NULL UNIQUE,
   onboarded_at      TEXT,
   last_seen_at      TEXT,

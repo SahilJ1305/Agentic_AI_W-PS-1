@@ -64,7 +64,22 @@ async def init_db(db_path: str | None = None) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(path) as db:
         await db.executescript(_SCHEMA_PATH.read_text())
+        await _add_missing_columns(db)
         await db.commit()
+
+
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS skips
+# existing tables, so older DB files get these through ALTER TABLE.
+_ADDED_COLUMNS = [
+    ("participants", "github_username", "TEXT"),
+]
+
+
+async def _add_missing_columns(db: aiosqlite.Connection) -> None:
+    for table, column, decl in _ADDED_COLUMNS:
+        cur = await db.execute(f"PRAGMA table_info({table})")
+        if column not in {row[1] for row in await cur.fetchall()}:
+            await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -111,14 +126,24 @@ async def create_participant(
     skills: str | None = None,
     invite_code: str,
     telegram_username: str | None = None,
+    github_username: str | None = None,
 ) -> int:
     cur = await db.execute(
         """INSERT INTO participants
-           (project_id, name, role, skills, invite_code, telegram_username)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (project_id, name, role, skills, invite_code, telegram_username),
+           (project_id, name, role, skills, invite_code, telegram_username, github_username)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (project_id, name, role, skills, invite_code, telegram_username, github_username),
     )
     return cur.lastrowid
+
+
+async def set_participant_github(
+    db: aiosqlite.Connection, participant_id: int, github_username: str | None
+) -> None:
+    await db.execute(
+        "UPDATE participants SET github_username = ? WHERE id = ?",
+        (github_username, participant_id),
+    )
 
 
 async def get_participant_by_invite(db: aiosqlite.Connection, invite_code: str) -> dict | None:
@@ -292,6 +317,7 @@ async def update_task_status(
     progress_note: str | None = None,
     eta: str | None = None,
     completion_evidence: str | None = None,
+    verified: bool | None = None,
     flags_json: str | None = None,
     completed_at: str | None = None,
     last_reply_at: str | None = None,
@@ -317,6 +343,9 @@ async def update_task_status(
     if completion_evidence is not None:
         sets.append("completion_evidence = ?")
         params.append(completion_evidence)
+    if verified is not None:
+        sets.append("verified = ?")
+        params.append(1 if verified else 0)
     if flags_json is not None:
         sets.append("flags_json = ?")
         params.append(flags_json)
