@@ -71,6 +71,7 @@ async def init_db(db_path: str | None = None) -> None:
 # Columns added after the first release. CREATE TABLE IF NOT EXISTS skips
 # existing tables, so older DB files get these through ALTER TABLE.
 _ADDED_COLUMNS = [
+    ("projects", "owner_user_id", "INTEGER"),
     ("participants", "github_username", "TEXT"),
 ]
 
@@ -94,15 +95,29 @@ def _rows(rows) -> list[dict]:
 
 # ── Projects ──────────────────────────────────────────────────────────────────
 
-async def create_project(db: aiosqlite.Connection, *, name: str, timezone: str = "Asia/Kolkata") -> int:
+async def create_project(
+    db: aiosqlite.Connection,
+    *,
+    name: str,
+    timezone: str = "Asia/Kolkata",
+    owner_user_id: int | None = None,
+) -> int:
     cur = await db.execute(
-        "INSERT INTO projects (name, timezone) VALUES (?, ?)", (name, timezone)
+        "INSERT INTO projects (name, timezone, owner_user_id) VALUES (?, ?, ?)",
+        (name, timezone, owner_user_id),
     )
     return cur.lastrowid
 
 
-async def list_projects(db: aiosqlite.Connection) -> list[dict]:
-    cur = await db.execute("SELECT * FROM projects ORDER BY id")
+async def list_projects(db: aiosqlite.Connection, *, user_id: int | None = None) -> list[dict]:
+    """All projects, or only those `user_id` owns plus unowned demo projects."""
+    if user_id is None:
+        cur = await db.execute("SELECT * FROM projects ORDER BY id")
+    else:
+        cur = await db.execute(
+            "SELECT * FROM projects WHERE owner_user_id = ? OR owner_user_id IS NULL ORDER BY id",
+            (user_id,),
+        )
     return _rows(await cur.fetchall())
 
 

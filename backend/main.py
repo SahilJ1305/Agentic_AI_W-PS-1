@@ -1,75 +1,17 @@
-# from fastapi import FastAPI, Request
-# from fastapi.middleware.cors import CORSMiddleware
-# import os
-# from starlette.middleware.sessions import SessionMiddleware
-# from contextlib import asynccontextmanager
+"""
+Accounts service for Cadence: sign-up, login (password or Google), password reset.
 
-# from database.postgresConn import engine, Base
-# from models import all_model
-# from router import user_routes, auth_routes, telegram_routes
-# from services.telegram_service import telegram_service
+Users live in Postgres (DATABASE_URL). Login returns an HS256 JWT signed with
+SECRET_KEY; the Cadence API (app/, port 8000) checks the same token, so both
+services must share SECRET_KEY.
 
-# # Create database tables
-# all_model.Base.metadata.create_all(bind=engine)
-
-# @asynccontextmanager
-# async def lifespan(app: FastAPI):
-#     await telegram_service.start()
-
-#     try:
-#         yield
-#     finally:
-#         await telegram_service.stop()
-
-# app = FastAPI(
-#     title="Kurukshetra Backend API",
-#     description="Backend API Kurukshetra"
-# )
-
-# # 1. SESSION MIDDLEWARE
-# # Required for Google OAuth redirect state management
-# app.add_middleware(
-#     SessionMiddleware, 
-#     secret_key=os.getenv("SESSION_SECRET", "super-secret-key-change-me"),
-#     same_site="lax",
-#     https_only=False  # Set to True in production with HTTPS
-# )
-
-# # 2. CORS ORIGINS
-# # Added Docker container origins (http://localhost:8080) and wildcard allowance for development
-# origins = [
-#     "http://localhost:5173",
-#     "http://127.0.0.1:5173",
-#     "http://localhost:8080",
-#     "http://127.0.0.1:8080",
-# ]
-
-# # Add CORS middleware
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=origins,
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-
-# @app.get("/")
-# def root():
-#     return {"message": "Welcome to Kurukshetra!"}
-
-# # Include routers
-# app.include_router(auth_routes.router)
-# app.include_router(user_routes.router)
-# app.include_router(telegram_routes.router)
-
-
-
+    cd backend && uvicorn main:app --port 8001
+"""
 import os
-from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 
-# Load .env before importing services that read environment variables.
+# Load .env before importing modules that read environment variables.
 load_dotenv()
 
 from fastapi import FastAPI
@@ -78,57 +20,30 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from database.postgresConn import engine
 from models import all_model
-from router import user_routes, auth_routes, telegram_routes
-from services.telegram_service import telegram_service
+from router import auth_routes, user_routes
 
 
-# Create database tables
 all_model.Base.metadata.create_all(bind=engine)
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    print("Starting Telegram service...")
-
-    await telegram_service.start()
-
-    print("Telegram service started.")
-
-    try:
-        yield
-    finally:
-        print("Stopping Telegram service...")
-        await telegram_service.stop()
-
-
-# IMPORTANT: Connect the lifespan function here.
 app = FastAPI(
-    title="Kurukshetra Backend API",
-    description="Backend API Kurukshetra",
-    lifespan=lifespan,
+    title="Cadence accounts API",
+    description="Users and login for the Cadence dashboard",
 )
 
-
-# Session middleware
+# Google OAuth keeps its redirect state in the session cookie.
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.getenv(
-        "SESSION_SECRET",
-        "super-secret-key-change-me",
-    ),
+    secret_key=os.getenv("SESSION_SECRET") or os.environ["SECRET_KEY"],
     same_site="lax",
     https_only=False,
 )
 
-
-# CORS configuration
-origins = [
+frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+origins = sorted({
+    frontend_url,
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "http://localhost:8080",
-    "http://127.0.0.1:8080",
-]
-
+})
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -140,12 +55,8 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    return {"message": "Welcome to Kurukshetra!"}
+    return {"service": "cadence-accounts", "status": "ok"}
 
 
-# Existing routers
 app.include_router(auth_routes.router)
 app.include_router(user_routes.router)
-
-# Telegram router
-app.include_router(telegram_routes.router)

@@ -9,15 +9,16 @@ import logging
 from datetime import datetime, timezone
 from typing import Annotated
 
+import secrets
+
 import aiosqlite
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, PlainTextResponse
 from pydantic import BaseModel
 
-import secrets
-
 from app.agents.planner import run_planner
 from app.agents.schemas import PlanDraft
+from app.api.auth import CurrentUser, current_user, visible_project
 from app.api.sse import broadcaster
 from app.config import settings
 from app.core.dependency_engine import validate_graph, recompute_all_readiness, compute_critical_path
@@ -43,25 +44,25 @@ class CreateProjectRequest(BaseModel):
 
 
 @router.get("")
-async def list_projects():
+async def list_projects(user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
-        return await repo.list_projects(db)
+        return await repo.list_projects(db, user_id=user.id)
 
 
 @router.post("")
-async def create_project(req: CreateProjectRequest):
+async def create_project(req: CreateProjectRequest, user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
-        pid = await repo.create_project(db, name=req.name, timezone=req.timezone)
+        pid = await repo.create_project(
+            db, name=req.name, timezone=req.timezone, owner_user_id=user.id,
+        )
         project = await repo.get_project(db, pid)
     return project
 
 
 @router.get("/{pid}")
-async def get_project(pid: int):
+async def get_project(pid: int, user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
-        project = await repo.get_project(db, pid)
-        if not project:
-            raise HTTPException(404, "Project not found")
+        project = await visible_project(db, pid, user)
         tasks = await repo.list_tasks(db, pid)
         by_status = {}
         for t in tasks:
@@ -82,6 +83,7 @@ async def upload_document(
     kind: Annotated[str, Form()],
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    user: CurrentUser = Depends(current_user),
 ):
     """Upload a spec, task_doc, or roster. The original text is stored unchanged."""
     allowed_kinds = ("spec", "task_doc", "roster")
@@ -99,9 +101,7 @@ async def upload_document(
     imported = None
 
     async with repo.db_context() as db:
-        project = await repo.get_project(db, pid)
-        if not project:
-            raise HTTPException(404, "Project not found")
+        project = await visible_project(db, pid, user)
         doc_id = await repo.save_source_document(
             db,
             project_id=pid,
@@ -136,12 +136,14 @@ async def upload_document(
 
 
 @router.post("/{pid}/plan")
-async def run_plan(pid: int, background_tasks: BackgroundTasks):
+async def run_plan(
+    pid: int,
+    background_tasks: BackgroundTasks,
+    user: CurrentUser = Depends(current_user),
+):
     """Run the Planner Agent asynchronously. Returns draft_id; SSE plan.ready when done."""
     async with repo.db_context() as db:
-        project = await repo.get_project(db, pid)
-        if not project:
-            raise HTTPException(404, "Project not found")
+        project = await visible_project(db, pid, user)
         docs = await repo.list_source_documents(db, pid)
         participants = await repo.list_participants(db, pid)
 
@@ -204,8 +206,9 @@ async def _run_planner_bg(pid, project_name, spec_text, task_doc_text, roster):
 
 
 @router.get("/{pid}/plan/{draft_id}")
-async def get_plan_draft(pid: int, draft_id: int):
+async def get_plan_draft(pid: int, draft_id: int, user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
+        await visible_project(db, pid, user)
         draft = await repo.get_plan_draft(db, draft_id)
     if not draft or draft["project_id"] != pid:
         raise HTTPException(404, "Draft not found")
@@ -221,9 +224,15 @@ class CommitPlanRequest(BaseModel):
 
 
 @router.post("/{pid}/plan/{draft_id}/commit")
-async def commit_plan(pid: int, draft_id: int, req: CommitPlanRequest):
+async def commit_plan(
+    pid: int,
+    draft_id: int,
+    req: CommitPlanRequest,
+    user: CurrentUser = Depends(current_user),
+):
     now = _now()
     async with repo.db_context() as db:
+        await visible_project(db, pid, user)
         draft_row = await repo.get_plan_draft(db, draft_id)
         if not draft_row or draft_row["project_id"] != pid:
             raise HTTPException(404, "Draft not found")
@@ -330,8 +339,10 @@ async def commit_plan(pid: int, draft_id: int, req: CommitPlanRequest):
 
 
 @router.get("/{pid}/stream")
-async def stream_events(pid: int):
-    """SSE endpoint for the dashboard."""
+async def stream_events(pid: int, user: CurrentUser = Depends(current_user)):
+    """SSE endpoint for the dashboard. The browser passes ?token= because EventSource has no headers."""
+    async with repo.db_context() as db:
+        await visible_project(db, pid, user)
     return StreamingResponse(
         broadcaster.stream(pid),
         media_type="text/event-stream",
@@ -355,13 +366,15 @@ class UpdateParticipantRequest(BaseModel):
 
 
 @router.post("/{pid}/participants")
-async def add_participant(pid: int, req: CreateParticipantRequest):
+async def add_participant(
+    pid: int,
+    req: CreateParticipantRequest,
+    user: CurrentUser = Depends(current_user),
+):
     if req.role not in ("lead", "member"):
         raise HTTPException(400, "role must be lead or member")
     async with repo.db_context() as db:
-        project = await repo.get_project(db, pid)
-        if not project:
-            raise HTTPException(404, "Project not found")
+        await visible_project(db, pid, user)
         participant_id = await repo.create_participant(
             db,
             project_id=pid,
@@ -391,8 +404,9 @@ async def update_participant(pid: int, participant_id: int, req: UpdateParticipa
 
 
 @router.get("/{pid}/participants")
-async def list_participants(pid: int):
+async def list_participants(pid: int, user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
+        await visible_project(db, pid, user)
         participants = await repo.list_participants(db, pid)
     return [_with_invite(person) for person in participants]
 
@@ -408,8 +422,9 @@ def _with_invite(person: dict | None) -> dict | None:
 
 
 @router.get("/{pid}/graph")
-async def get_graph(pid: int):
+async def get_graph(pid: int, user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
+        await visible_project(db, pid, user)
         tasks = await repo.list_tasks(db, pid)
         deps = await repo.list_all_dependencies(db, pid)
     nodes = [

@@ -1,8 +1,9 @@
 """
 Cadence process.
 
-Starts the API, the live dashboard, Telegram polling, the outbox worker
-and the follow-up scheduler in one asyncio loop.
+Starts the API, Telegram polling, the outbox worker and the follow-up
+scheduler in one asyncio loop. The board is the React app in frontend/;
+logins come from backend/, which signs the JWTs this API checks.
 
     python -m app.main
 """
@@ -11,21 +12,20 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
-
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 
 from app.api import routes_admin, routes_projects, routes_tasks
 from app.api.sse import broadcaster
 from app.config import settings
 from app.db import repo
 from app.scheduler.jobs import start_scheduler, stop_scheduler
+from app.telegram import log_filters
 from app.telegram.gateway import build_application, set_sse_publish
 
 log = logging.getLogger(__name__)
@@ -54,7 +54,6 @@ async def _warm_ollama() -> None:
             "Ollama is not reachable (%s). Start the tunnel with: ssh -fN ollama-server",
             exc,
         )
-_DASHBOARD = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
 
 
 @asynccontextmanager
@@ -63,7 +62,10 @@ async def lifespan(app: FastAPI):
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    log_filters.install()
     await repo.init_db()
+    if not settings.secret_key:
+        log.warning("SECRET_KEY is empty. Every board request will fail until it matches the backend's.")
 
     async def publish(event: str, payload: dict) -> None:
         await broadcaster.publish(event, payload)
@@ -127,12 +129,14 @@ app.add_middleware(
 )
 app.include_router(routes_projects.router, prefix="/api")
 app.include_router(routes_tasks.router, prefix="/api")
+app.include_router(routes_admin.public_router, prefix="/api")
 app.include_router(routes_admin.router, prefix="/api")
 
 
 @app.get("/")
 async def dashboard():
-    return FileResponse(_DASHBOARD, media_type="text/html")
+    """The board lives in the React app now, behind login."""
+    return RedirectResponse(f"{settings.frontend_url.rstrip('/')}/dashboard")
 
 
 if __name__ == "__main__":
