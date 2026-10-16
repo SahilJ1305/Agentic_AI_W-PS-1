@@ -66,6 +66,7 @@ async def apply(
     db: aiosqlite.Connection,
     now: str,
     verifications: dict[str, GitVerification] | None = None,
+    confirmed: frozenset[str] = frozenset(),
 ) -> PolicyDecision:
     """
     Run rules R1–R16 in order against the Interpretation.
@@ -73,6 +74,9 @@ async def apply(
 
     `verifications` holds Git claim checker results keyed by task key
     (app/tools/git_checker.verify_updates); rules R7a/R7b use them.
+
+    `confirmed` names rules the owner has just answered ("R6" = yes it works end to end,
+    "R8" = yes reopen), so the engine does not ask the same question again.
     """
     decision = PolicyDecision()
 
@@ -93,19 +97,32 @@ async def apply(
         )
         return decision
 
-    # Handoff request
+    # Handoff request (G3.11): tell the lead, with a suggested new owner
     if interpretation.intent == "handoff_request":
         decision.rule_log.append("R13: handoff_request → notify lead")
         lead = await repo.get_lead(db, project_id)
-        if lead and lead.get("telegram_chat_id"):
+        open_mine = [t for t in sender_tasks_list if t["status"] != "complete"]
+        named = next((sender_task_map[u.task_key] for u in interpretation.updates
+                      if u.task_key in sender_task_map), None)
+        handoff_task = named or (open_mine[0] if open_mine else None)
+        if lead and lead.get("telegram_chat_id") and lead["id"] != sender["id"]:
+            from app.core.handoff import suggest_owner
+
+            pick = await suggest_owner(db, project_id, handoff_task, sender["id"]) if handoff_task else None
+            decision.rule_log.append(
+                f"R13: suggested {pick['name']} (skill matches {pick['skill_hits']}, {pick['open_count']} open)"
+                if pick else "R13: nobody to suggest"
+            )
             decision.notifications.add(
                 participant_id=lead["id"],
                 template_key="HANDOFF_TO_LEAD",
                 context={
                     "name": sender["name"],
-                    "task_title": (sender_tasks_list[0]["title"] if sender_tasks_list else ""),
+                    "task": handoff_task or {},
                     "reason": interpretation.raw_message,
-                    "suggested_owner": "TBD",
+                    "suggested_owner": pick["name"] if pick else "nobody free",
+                    "skills": pick["skills"] if pick else "",
+                    "open_count": pick["open_count"] if pick else "",
                 },
             )
         return decision
@@ -134,6 +151,7 @@ async def apply(
             now=now,
             decision=decision,
             verifications=verifications or {},
+            confirmed=confirmed,
         )
 
     # If nothing was approved and nothing was clarified, send NOT_UNDERSTOOD
@@ -163,6 +181,7 @@ async def _apply_update(
     now: str,
     decision: PolicyDecision,
     verifications: dict[str, GitVerification],
+    confirmed: frozenset[str] = frozenset(),
 ) -> None:
     """Apply rules R1–R16 to a single TaskUpdate."""
 
@@ -227,9 +246,15 @@ async def _apply_update(
         update.status = "blocked"
 
     # R6: complete while a hard upstream is incomplete → ask before completing
+    carried_flags: list[str] = []
     if update.status == "complete":
         conflict_task = await _check_dependency_conflict(task, db)
-        if conflict_task:
+        if conflict_task and "R6" in confirmed:
+            decision.rule_log.append(
+                f"R6: owner confirmed it works although {conflict_task['key']} is {conflict_task['status']} → complete, needs_verification"
+            )
+            carried_flags += ["needs_verification", "dependency_conflict"]
+        elif conflict_task:
             decision.rule_log.append(f"R6: complete while {conflict_task['key']} incomplete → DEPENDENCY_CONFLICT")
             decision.notifications.add(
                 participant_id=sender["id"],
@@ -269,7 +294,7 @@ async def _apply_update(
             task_key=task["key"],
             new_status="complete",
             old_status=task["status"],
-            flags_to_add=["needs_verification"],
+            flags_to_add=list(dict.fromkeys(["needs_verification", *carried_flags])),
             reason="Completed — evidence required but not provided",
             rule_fired="R7",
             confidence=update.status_confidence,
@@ -277,7 +302,7 @@ async def _apply_update(
         return
 
     # R8: Moving away from complete without correction intent
-    if task["status"] == "complete" and update.status and update.status != "complete":
+    if task["status"] == "complete" and update.status and update.status != "complete" and "R8" not in confirmed:
         if interpretation_intent_is_not_correction := True:  # caller already checked intent
             decision.rule_log.append("R8: moving away from complete → ask CONFIRM_REOPEN")
             decision.notifications.add(
@@ -346,7 +371,7 @@ async def _apply_update(
                 break
 
     # R12: ETA past deadline → flag at_risk
-    flags_to_add: list[str] = []
+    flags_to_add: list[str] = list(carried_flags)
     if update.eta and task.get("deadline"):
         try:
             eta_dt = datetime.fromisoformat(update.eta)

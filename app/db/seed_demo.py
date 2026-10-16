@@ -20,7 +20,7 @@ from pathlib import Path
 import aiosqlite
 
 from app.config import settings
-from app.core.dependency_engine import recompute_all_readiness
+from app.core.dependency_engine import compute_critical_path, recompute_all_readiness
 from app.db import repo
 
 _DOCS = Path(__file__).resolve().parents[2] / "docs"
@@ -258,6 +258,7 @@ async def seed(force: bool = False) -> None:
                 )
 
         await recompute_all_readiness(project_id, db, now)
+        await compute_critical_path(project_id, db, now)
         await _store_demo_documents(db, project_id, now)
 
         print("\nParticipant invite codes:")

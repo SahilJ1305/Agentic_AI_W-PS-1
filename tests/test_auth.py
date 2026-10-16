@@ -63,7 +63,11 @@ def test_projects_belong_to_the_user_who_created_them(tmp_path):
         assert client.get(f"/api/tasks/{task_id}", headers=bob).status_code == 200
 
 
-def test_live_stream_accepts_token_in_url(tmp_path):
+def test_live_stream_accepts_token_in_url(tmp_path, monkeypatch):
+    from app.api import sse
+
+    monkeypatch.setattr(sse, "KEEPALIVE_S", 0.1)      # let the stream end quickly
+    monkeypatch.setattr(sse, "MAX_LIFETIME_S", 0.3)
     with _client(tmp_path, "stream.db") as client:
         token = auth_header()["Authorization"].split(" ", 1)[1]
         assert client.get("/api/projects/1/stream").status_code == 401

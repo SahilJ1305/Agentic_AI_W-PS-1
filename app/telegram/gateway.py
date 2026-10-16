@@ -10,15 +10,18 @@ from __future__ import annotations
 import html
 import json
 import logging
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import BotCommand, ChatMember, Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.error import Conflict
 from telegram.ext import (
     Application,
-    CommandHandler,
-    MessageHandler,
     CallbackQueryHandler,
+    ChatMemberHandler,
+    CommandHandler,
     ContextTypes,
+    MessageHandler,
     filters,
 )
 
@@ -33,6 +36,56 @@ log = logging.getLogger(__name__)
 # Will be set by main.py lifespan
 _sse_publish = None
 _project_id: int = 1  # Tier 1: single project
+
+
+# What /health and the dashboard show about the bot.
+bot_state: dict = {"running": False, "username": None, "last_conflict": None}
+
+BOT_COMMANDS = [
+    ("start", "Join your project with your invite link"),
+    ("mytasks", "Your tasks"),
+    ("next", "Your next ready task"),
+    ("status", "Project overview"),
+    ("done", "Mark a task done: /done T3"),
+    ("blocked", "Report a blocker: /blocked T3 reason"),
+    ("undo", "Undo your last update"),
+    ("pause", "Pause reminders: /pause 3 (hours)"),
+    ("digest", "Post the project digest"),
+    ("risk", "Post the risk report"),
+    ("help", "What I understand"),
+]
+
+
+def on_poll_error(error: Exception) -> None:
+    """Called by python-telegram-bot whenever polling fails."""
+    if isinstance(error, Conflict):
+        bot_state["last_conflict"] = time.monotonic()
+
+
+def telegram_status() -> dict:
+    """{'status': 'polling' | 'conflict' | 'disabled', 'username': str | None}"""
+    if not bot_state["running"]:
+        return {"status": "disabled", "username": None}
+    recent = bot_state["last_conflict"]
+    conflict = recent is not None and time.monotonic() - recent < 60
+    return {"status": "conflict" if conflict else "polling", "username": bot_state["username"]}
+
+
+async def configure_bot(application: Application) -> None:
+    """After the bot connects: learn its real username, publish the command menu."""
+    bot = application.bot
+    bot_state.update(running=True, username=bot.username)
+    if bot.username:
+        settings.telegram_bot_username = bot.username   # invite links must point at THIS bot
+    try:
+        await bot.set_my_commands([BotCommand(name, text) for name, text in BOT_COMMANDS])
+        await bot.set_my_short_description("Cadence keeps your group project on track: reply here with updates.")
+    except Exception:
+        log.warning("Could not publish the bot command menu", exc_info=True)
+
+
+def mark_bot_stopped() -> None:
+    bot_state.update(running=False)
 
 
 def set_sse_publish(fn) -> None:
@@ -59,6 +112,10 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Handle /start <invite_code>."""
     chat_id = update.effective_chat.id
     args = context.args or []
+
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("Message me directly to join: open my profile and tap Start.")
+        return
 
     if not args:
         await update.message.reply_text(
@@ -118,8 +175,15 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     await update.message.reply_text(welcome, parse_mode="HTML")
 
-    await _publish("message.out", {
+    await _publish("participant.joined", {
+        "project_id": participant["project_id"],
         "participant": participant["name"],
+        "participant_id": participant["id"],
+    })
+    await _publish("message.out", {
+        "project_id": participant["project_id"],
+        "participant": participant["name"],
+        "text": welcome,
         "template_key": "ONBOARD_WELCOME",
     })
 
@@ -248,6 +312,9 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/done T3 — mark a task complete\n"
         "/blocked T3 reason — report a blocker\n"
         "/undo — revert your last update\n"
+        "/pause 3 — no reminders for 3 hours (/pause 0 to resume)\n"
+        "/digest, /risk — post a project report (lead, or in the team group)\n"
+        "/linkgroup — lead only: send in the team group to receive the daily digest there\n"
         "\nOr just reply in plain English — I'll understand."
     )
     await update.message.reply_text(text, parse_mode="HTML")
@@ -286,7 +353,7 @@ async def blocked_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ── Inline button callback ────────────────────────────────────────────────────
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle inline keyboard button presses."""
+    """Inline-button presses. Every button maps to a fixed action, so the LLM is never involved."""
     query = update.callback_query
     await query.answer()
     data = query.data or ""
@@ -296,81 +363,196 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     async with repo.db_context() as db:
         participant = await repo.get_participant_by_chat_id(db, chat_id)
         if not participant:
+            await query.message.reply_text("I don't recognise you. Use the invite link your project lead shared.")
             return
-
-        open_pq = await repo.get_open_question(db, participant["id"])
-        if not open_pq:
-            await query.edit_message_text("This button has already been answered.")
-            return
-
+        question = None
         try:
-            payload = json.loads(open_pq.get("payload_json") or "{}")
+            asked = await repo.get_question(db, int(data.split(":")[1]))
+            if asked and asked["participant_id"] == participant["id"]:
+                question = asked          # the question this very button belongs to
+        except (IndexError, ValueError):
+            pass
+        if not question or question["status"] != "open":
+            await _clear_buttons(query)
+            await query.message.reply_text("That question was already answered.")
+            return
+        try:
+            payload = json.loads(question.get("payload_json") or "{}")
         except json.JSONDecodeError:
             payload = {}
         template_key = payload.get("_template_key", "")
-        buttons = buttons_for(template_key, payload) or ["Done", "In progress", "Blocked"]
-        cb = parse_callback(data, buttons)
+        cb = parse_callback(data, buttons_for(template_key, payload) or ["Done", "In progress", "Blocked"])
         if cb is None:
             return
-        option_text = cb.option_text
-        task = await repo.get_task(db, open_pq["task_id"]) if open_pq.get("task_id") else None
+        choice = cb.option_text
+        task = await repo.get_task(db, question["task_id"]) if question.get("task_id") else None
+        blocker = None
+        if payload.get("blocker", {}).get("id"):
+            blocker = await repo.get_blocker(db, payload["blocker"]["id"])
 
-    status_from_button = {
-        "Done": "complete",
-        "In progress": "in_progress",
-        "Blocked": "blocked",
-        "Not started": "pending",
-        "Yes it works": "complete",
-        "Not fully": "in_progress",
-    }
-    if option_text == "Yes" and payload.get("_claimed_status") and task:
-        status_from_button = {**status_from_button, "Yes": payload["_claimed_status"]}
-    if option_text == "None of these":
-        await query.message.reply_text("Okay, I won't change a task.")
-        return
-    chosen_key = option_text.split()[0].upper() if option_text else ""
-    if task is None and chosen_key.startswith("T") and chosen_key[1:].isdigit():
-        source = str(payload.get("_source_text") or option_text)
-        reply = await apply_explicit_status(
+    async def close() -> None:
+        async with repo.db_context() as db:
+            await repo.close_question(db, question["id"], answered_at=now)
+
+    async def set_status(key: str, status: str, **extra) -> str:
+        return await apply_explicit_status(
             participant_id=participant["id"],
             project_id=participant["project_id"],
-            task_key=chosen_key,
-            status="complete",
-            text=source,
+            task_key=key,
+            status=status,
+            text=choice,
             telegram_message_id=query.message.message_id,
             sse_publish=_publish,
+            question_id=question["id"],
+            **extra,
         )
-        await query.message.reply_text(reply)
-        await query.edit_message_reply_markup(reply_markup=None)
-        return
-    if option_text == "No" and payload.get("_template_key") == "PEER_CLAIM_CONFIRM":
-        await query.message.reply_text("Left that task unchanged.")
-        return
-    if task and option_text in status_from_button:
-        await apply_explicit_status(
-            participant_id=participant["id"],
-            project_id=participant["project_id"],
-            task_key=task["key"],
-            status=status_from_button[option_text],
-            text=option_text,
-            telegram_message_id=query.message.message_id,
-            sse_publish=_publish,
+
+    reply: str | None = None
+
+    if choice == "None of these":
+        await close()
+        reply = "Okay, I won't change a task."
+
+    elif template_key == "PEER_CLAIM_CONFIRM":
+        if choice == "Yes" and task and payload.get("_claimed_status"):
+            await set_status(task["key"], payload["_claimed_status"])
+        else:
+            await close()
+            reply = "Left that task unchanged."
+
+    elif template_key == "UNBLOCK_REQUEST" and task:
+        blocked = await _get_task(blocker["task_id"]) if blocker else None
+        if choice == "Working on it":
+            if task["status"] == "pending":
+                await set_status(task["key"], "in_progress")
+            else:
+                await close()
+            await _tell_blocked_owner(blocked, task, blocker, participant, "UNBLOCK_WORKING")
+            reply = f"Thanks. I've told them you're on <b>{_escape(task['title'])}</b>."
+        elif choice == "Already done":
+            await set_status(task["key"], "complete")
+        else:  # Not mine
+            await close()
+            await _tell_blocked_owner(blocked, task, blocker, participant, "UNBLOCK_DECLINED", lead_too=True)
+            reply = "Okay, I've passed this to the lead to find the right person."
+
+    elif template_key == "CONFIRM_UNBLOCKED" and task:
+        if choice == "Yes unblocked":
+            await set_status(task["key"], "in_progress", blocker_resolved=True)
+        else:
+            if blocker:
+                async with repo.db_context() as db:
+                    await repo.reopen_blocker(db, blocker["id"])
+            await close()
+            reply = "Okay, it stays Blocked. I'll keep chasing."
+
+    elif template_key == "DEPENDENCY_CONFLICT" and task:
+        await set_status(
+            task["key"],
+            "complete" if choice == "Yes it works" else "in_progress",
+            confirmed=frozenset({"R6"} if choice == "Yes it works" else ()),
         )
+
+    elif template_key == "CONFIRM_REOPEN" and task:
+        if choice == "Yes reopen":
+            await set_status(task["key"], "in_progress", confirmed=frozenset({"R8"}))
+        else:
+            await close()
+            reply = "Okay, it stays Complete."
+
+    elif template_key in ("VERIFY_COMPLETION", "GIT_UNVERIFIED"):
+        await close()
+        reply = "Okay. It stays Complete, marked unverified until you share a link."
+
+    elif task and choice in _STATUS_BUTTONS:
+        await set_status(task["key"], _STATUS_BUTTONS[choice])
+
+    elif template_key == "CLARIFY_TASK":
+        key = choice.split()[0].upper() if choice else ""
+        if key.startswith("T") and key[1:].isdigit():
+            source = str(payload.get("_source_text") or choice)
+            await apply_explicit_status(
+                participant_id=participant["id"],
+                project_id=participant["project_id"],
+                task_key=key,
+                status="complete",
+                text=source,
+                telegram_message_id=query.message.message_id,
+                sse_publish=_publish,
+                question_id=question["id"],
+            )
+        else:
+            await close()
+            reply = "Okay, I won't change a task."
+
     else:
         await handle_message(
             participant_id=participant["id"],
             project_id=participant["project_id"],
-            text=option_text,
+            text=choice,
             telegram_message_id=query.message.message_id,
             sse_publish=_publish,
         )
 
-    await query.edit_message_reply_markup(reply_markup=None)
+    await _clear_buttons(query)
+    if reply:
+        await query.message.reply_text(reply, parse_mode="HTML")
+
+
+_STATUS_BUTTONS = {
+    "Done": "complete",
+    "In progress": "in_progress",
+    "Blocked": "blocked",
+    "Not started": "pending",
+}
+
+
+async def _get_task(task_id: int):
+    async with repo.db_context() as db:
+        return await repo.get_task(db, task_id)
+
+
+async def _clear_buttons(query) -> None:
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass     # the message may be too old to edit; the answer still counts
+
+
+async def _tell_blocked_owner(blocked, upstream, blocker, helper, template_key, lead_too: bool = False) -> None:
+    """Tell whoever is waiting what the person they were waiting on said."""
+    if not blocked:
+        return
+    from app.core.notifications import NotificationBatch
+
+    now = await _now()
+    async with repo.db_context() as db:
+        batch = NotificationBatch()
+        context = {
+            "task": blocked,
+            "upstream_task": upstream,
+            "blocker": blocker or {},
+            "upstream_owner": helper["name"],
+        }
+        if blocked.get("owner_id"):
+            batch.add(participant_id=blocked["owner_id"], template_key=template_key, context=context)
+        if lead_too:
+            lead = await repo.get_lead(db, blocked["project_id"])
+            owner = await repo.get_participant(db, blocked["owner_id"]) if blocked.get("owner_id") else None
+            if lead:
+                batch.add(
+                    participant_id=lead["id"],
+                    template_key="BLOCKER_ESCALATED",
+                    context={**context, "reporter": (owner or {}).get("name", "The owner"), "minutes": "a few"},
+                )
+        await batch.flush(db, now=now)
 
 
 # ── Plain message ─────────────────────────────────────────────────────────────
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_chat.type != "private":
+        return       # group chatter is a stretch goal (S1); commands still work there
     chat_id = update.effective_chat.id
     text = (update.message.text or "").strip()
     if not text:
@@ -394,17 +576,120 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
+# ── /pause ────────────────────────────────────────────────────────────────────
+
+async def pause_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop reminders for a while. Replies to things you say still work."""
+    async with repo.db_context() as db:
+        participant = await repo.get_participant_by_chat_id(db, update.effective_chat.id)
+        if not participant:
+            await update.message.reply_text("You're not in this project.")
+            return
+        args = context.args or []
+        try:
+            hours = float(args[0]) if args else 4.0
+        except ValueError:
+            await update.message.reply_text("Usage: /pause 3 (hours). /pause 0 turns reminders back on.")
+            return
+        hours = max(0.0, min(hours, 72.0))
+        if hours == 0:
+            await repo.set_paused_until(db, participant["id"], None)
+            # messages held back while paused can go out now
+            await db.execute(
+                "UPDATE outbox SET not_before = NULL WHERE participant_id = ? AND status = 'queued'",
+                (participant["id"],),
+            )
+            reply = "Reminders are back on."
+        else:
+            until = datetime.now(timezone.utc) + timedelta(hours=hours)
+            await repo.set_paused_until(db, participant["id"], until.isoformat())
+            reply = f"Paused for {hours:g} h. I won't send reminders until then. /pause 0 to resume."
+    await update.message.reply_text(reply)
+    await _publish("team.changed", {"project_id": participant["project_id"], "participant": participant["name"]})
+
+
+# ── /digest, /risk, /linkgroup ────────────────────────────────────────────────
+
+async def _report_context(update: Update):
+    """Who is asking and for which project. Allowed: the lead anywhere, anyone in the linked group."""
+    chat, user = update.effective_chat, update.effective_user
+    async with repo.db_context() as db:
+        sender = await repo.get_participant_by_chat_id(db, user.id) if user else None
+        group_project = None
+        if chat.type != "private":
+            group_project = await repo.get_project_by_group(db, chat.id)
+    if group_project:
+        return group_project["id"], sender
+    if sender and sender["role"] == "lead":
+        return sender["project_id"], sender
+    return None, sender
+
+
+async def _send_report(update: Update, kind: str) -> None:
+    from app.core.reports import generate_report
+
+    project_id, sender = await _report_context(update)
+    if project_id is None:
+        await update.message.reply_text(
+            "Only the project lead can ask for this, or anyone in the team group once the lead has run /linkgroup there."
+            if sender else "You're not in a project yet. Use your invite link first."
+        )
+        return
+    async with repo.db_context() as db:
+        report = await generate_report(db, project_id, kind, post=False)
+    await update.message.reply_text(report["telegram_html"], parse_mode="HTML")
+
+
+async def digest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _send_report(update, "digest")
+
+
+async def risk_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _send_report(update, "risk")
+
+
+async def linkgroup_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Lead sends this inside the team group so digests are posted there."""
+    chat = update.effective_chat
+    if chat.type not in ("group", "supergroup"):
+        await update.message.reply_text("Add me to your team group, then send /linkgroup there.")
+        return
+    async with repo.db_context() as db:
+        sender = await repo.get_participant_by_chat_id(db, update.effective_user.id)
+        if not sender or sender["role"] != "lead":
+            await update.message.reply_text("Only the project lead can link this group.")
+            return
+        await repo.set_project_group(db, sender["project_id"], chat.id)
+        project = await repo.get_project(db, sender["project_id"])
+    await update.message.reply_text(
+        f"Linked. I'll post the daily digest for {project['name']} here. Anyone can use /digest and /risk in this group.",
+    )
+    await _publish("team.changed", {"project_id": sender["project_id"], "group_linked": True})
+
+
+async def added_to_group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    change = update.my_chat_member
+    if not change or change.chat.type not in ("group", "supergroup"):
+        return
+    if change.new_chat_member.status in (ChatMember.MEMBER, ChatMember.ADMINISTRATOR) \
+            and change.old_chat_member.status in (ChatMember.LEFT, ChatMember.BANNED):
+        await context.bot.send_message(
+            change.chat.id,
+            "Hi, I'm Cadence. Project lead: send /linkgroup here so I post the daily digest in this group. "
+            "Everyone else: message me directly with your invite link to join.",
+        )
+
+
 # ── Application builder ───────────────────────────────────────────────────────
 
-def build_application(project_id: int = 1) -> Application:
+def build_application(project_id: int = 1, bot=None) -> Application:
+    """Build the bot. Tests pass `bot` (a fake) so no network is needed."""
     global _project_id
     _project_id = project_id
 
-    app = (
-        Application.builder()
-        .token(settings.telegram_bot_token)
-        .build()
-    )
+    builder = Application.builder()
+    builder = builder.bot(bot) if bot is not None else builder.token(settings.telegram_bot_token)
+    app = builder.build()
 
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("mytasks", mytasks_handler))
@@ -414,6 +699,11 @@ def build_application(project_id: int = 1) -> Application:
     app.add_handler(CommandHandler("blocked", blocked_handler))
     app.add_handler(CommandHandler("undo", undo_handler))
     app.add_handler(CommandHandler("help", help_handler))
+    app.add_handler(CommandHandler("pause", pause_handler))
+    app.add_handler(CommandHandler("digest", digest_handler))
+    app.add_handler(CommandHandler("risk", risk_handler))
+    app.add_handler(CommandHandler("linkgroup", linkgroup_handler))
+    app.add_handler(ChatMemberHandler(added_to_group_handler, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 

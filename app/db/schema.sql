@@ -204,6 +204,7 @@ CREATE TABLE IF NOT EXISTS task_events (            -- append-only audit log
 
 CREATE TABLE IF NOT EXISTS outbox (
   id               INTEGER PRIMARY KEY,
+  project_id       INTEGER REFERENCES projects(id),   -- group posts have no participant
   participant_id   INTEGER REFERENCES participants(id),
   chat_id          INTEGER NOT NULL,
   template_key     TEXT NOT NULL,

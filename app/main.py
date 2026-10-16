@@ -20,13 +20,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from app.api import routes_admin, routes_projects, routes_tasks
+from app.api import routes_admin, routes_projects, routes_reports, routes_tasks
 from app.api.sse import broadcaster
 from app.config import settings
 from app.db import repo
 from app.scheduler.jobs import start_scheduler, stop_scheduler
 from app.telegram import log_filters
-from app.telegram.gateway import build_application, set_sse_publish
+from app.telegram.gateway import (
+    build_application,
+    configure_bot,
+    mark_bot_stopped,
+    on_poll_error,
+    set_sse_publish,
+)
 
 log = logging.getLogger(__name__)
 
@@ -84,9 +90,10 @@ async def lifespan(app: FastAPI):
             await bot.start()
             if bot.updater is None:
                 raise RuntimeError("Telegram updater is unavailable")
-            await bot.updater.start_polling()
+            await configure_bot(bot)
+            await bot.updater.start_polling(error_callback=on_poll_error)
             outbox_task = asyncio.create_task(run_outbox_worker(bot.bot))
-            log.info("Telegram polling started")
+            log.info("Telegram polling started as @%s", bot.bot.username)
         except Exception:
             log.exception("Telegram did not start; the API and dashboard stay up")
             bot = None
@@ -106,6 +113,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         stop_scheduler()
+        mark_bot_stopped()
         if outbox_task is not None:
             outbox_task.cancel()
             try:
@@ -129,6 +137,7 @@ app.add_middleware(
 )
 app.include_router(routes_projects.router, prefix="/api")
 app.include_router(routes_tasks.router, prefix="/api")
+app.include_router(routes_reports.router, prefix="/api")
 app.include_router(routes_admin.public_router, prefix="/api")
 app.include_router(routes_admin.router, prefix="/api")
 

@@ -247,6 +247,8 @@ async def on_task_completed(
         raise ValueError(f"Task {task_id} not found")
 
     batch = NotificationBatch()
+    finisher = await repo.get_participant(db, task["owner_id"]) if task.get("owner_id") else None
+    finisher_name = (finisher or {}).get("name", "A teammate")
 
     # 1. Downstream readiness
     downstream_edges = await repo.list_dependencies_upstream(db, task_id, state="active")
@@ -276,6 +278,7 @@ async def on_task_completed(
                     context={
                         "task": down,
                         "upstream_task": task,
+                        "upstream_owner": finisher_name,
                     },
                 )
         elif edge["type"] == "soft":
@@ -284,7 +287,7 @@ async def on_task_completed(
                 batch.add(
                     participant_id=down["owner_id"],
                     template_key="FYI_UPSTREAM_DONE",
-                    context={"task": down, "upstream_task": task},
+                    context={"task": down, "upstream_task": task, "upstream_owner": finisher_name},
                 )
 
     # 2. Blockers linked to this task → pending_confirmation
@@ -299,6 +302,7 @@ async def on_task_completed(
                 context={
                     "task": blocked_task,
                     "upstream_task": task,
+                    "upstream_owner": finisher_name,
                     "blocker": blocker,
                 },
                 question_kind="confirm_unblocked",
@@ -345,22 +349,33 @@ async def on_blocker_raised(
     if blocker["kind"] == "task" and blocker.get("linked_task_id"):
         linked_task = await repo.get_task(db, blocker["linked_task_id"])
         if linked_task and linked_task["owner_id"]:
+            asker = await repo.get_participant(db, blocked_task["owner_id"]) if blocked_task["owner_id"] else None
+            helper = await repo.get_participant(db, linked_task["owner_id"])
             batch.add(
                 participant_id=linked_task["owner_id"],
                 template_key="UNBLOCK_REQUEST",
                 context={
+                    "task": blocked_task,             # what is stuck
+                    "upstream_task": linked_task,     # what it is waiting on
                     "blocker": blocker,
-                    "blocked_task": blocked_task,
-                    "linked_task": linked_task,
+                    "name": (asker or {}).get("name", "A teammate"),
+                    "unblocker": (helper or {}).get("name", ""),
                 },
                 question_kind="unblock_request",
                 question_task_id=linked_task["id"],
             )
     elif blocker["kind"] == "person" and blocker.get("linked_participant_id"):
+        asker = await repo.get_participant(db, blocked_task["owner_id"]) if blocked_task["owner_id"] else None
+        helper = await repo.get_participant(db, blocker["linked_participant_id"])
         batch.add(
             participant_id=blocker["linked_participant_id"],
-            template_key="UNBLOCK_REQUEST",
-            context={"blocker": blocker, "blocked_task": blocked_task},
+            template_key="UNBLOCK_REQUEST_PERSON",
+            context={
+                "task": blocked_task,
+                "blocker": blocker,
+                "name": (asker or {}).get("name", "A teammate"),
+                "unblocker": (helper or {}).get("name", ""),
+            },
         )
     # External blockers: handled in the digest / risk report (Tier 1: just record)
 

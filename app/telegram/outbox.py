@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import RetryAfter, TelegramError
 
+from app.api.sse import broadcaster
 from app.config import settings
 from app.db import repo
 
@@ -51,6 +52,12 @@ async def _tick(bot: Bot) -> None:
         await asyncio.sleep(PER_CHAT_DELAY_S)
 
         if not str(row.get("template_key") or "").startswith(_REPLY_PREFIXES):
+            paused_until = await _paused_until(row.get("participant_id"))
+            if paused_until:
+                async with repo.db_context() as db:
+                    await repo.defer_outbox(db, row["id"], paused_until)
+                log.info("Paused: deferred outbox %s until %s", row["id"], paused_until)
+                continue
             async with repo.db_context() as db:
                 last_sent = await repo.last_outbox_sent_at(db, row["chat_id"])
             if last_sent and _within_quiet_window(last_sent):
@@ -64,6 +71,7 @@ async def _tick(bot: Bot) -> None:
 
         try:
             markup = _build_markup(row.get("buttons_json"))
+            project_id = _get_project_id(row)
             async with repo.db_context() as db:
                 tg_msg = await bot.send_message(
                     chat_id=row["chat_id"],
@@ -73,7 +81,7 @@ async def _tick(bot: Bot) -> None:
                 )
                 msg_id = await repo.save_message(
                     db,
-                    project_id=_get_project_id(row),
+                    project_id=project_id,
                     participant_id=row.get("participant_id"),
                     direction="out",
                     telegram_message_id=tg_msg.message_id,
@@ -82,6 +90,16 @@ async def _tick(bot: Bot) -> None:
                     now=now,
                 )
                 await repo.mark_outbox_sent(db, row["id"], sent_message_id=msg_id)
+                person = (
+                    await repo.get_participant(db, row["participant_id"])
+                    if row.get("participant_id") else None
+                )
+            await broadcaster.publish("message.out", {
+                "project_id": project_id,
+                "participant": person["name"] if person else "group",
+                "text": row["text"],
+                "template_key": row["template_key"],
+            })
 
         except RetryAfter as e:
             log.warning("Telegram flood control: retry after %ss", e.retry_after)
@@ -124,6 +142,22 @@ def _build_markup(buttons_json: str | None) -> InlineKeyboardMarkup | None:
 
 
 def _get_project_id(row: dict) -> int:
-    # project_id is not stored in outbox; look it up from participant if needed
-    # For now return 1 (the demo project) — Tier 2 improvement
-    return 1
+    return row.get("project_id") or 1
+
+
+async def _paused_until(participant_id: int | None) -> str | None:
+    """If the person ran /pause, return when check-ins may resume (ISO), else None."""
+    if not participant_id:
+        return None
+    async with repo.db_context() as db:
+        person = await repo.get_participant(db, participant_id)
+    until = (person or {}).get("paused_until")
+    if not until:
+        return None
+    try:
+        when = datetime.fromisoformat(until)
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.isoformat() if when > datetime.now(timezone.utc) else None

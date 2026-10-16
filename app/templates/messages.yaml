@@ -99,3 +99,18 @@ OVERRIDE_NOTICE:
 
 MILESTONE_DONE:
   text: "Milestone <b>{milestone}</b> is complete! {done}/{total} tasks done overall."
+
+BLOCKER_REMINDER:
+  text: "Reminder {unblocker}: {reporter} is still blocked on <b>{task_title}</b> (<i>{blocker}</i>). Looks linked to your <b>{upstream_title}</b>. Any update or ETA?"
+
+BLOCKER_ESCALATED:
+  text: "Heads up: <b>{task_key} · {task_title}</b> has been blocked for {minutes} min on <i>{blocker}</i>. Owner: {reporter}. Can you help unblock it?"
+
+UNBLOCK_REQUEST_PERSON:
+  text: "Hi {unblocker}, {name} is blocked on <b>{task_title}</b>, waiting for <i>{blocker}</i> from you. Can you help?"
+
+UNBLOCK_WORKING:
+  text: "{upstream_owner} is working on <b>{upstream_title}</b>, which your <b>{task_title}</b> is waiting on. I'll tell you when it's done."
+
+UNBLOCK_DECLINED:
+  text: "{upstream_owner} says <b>{upstream_title}</b> isn't theirs, so your blocker on <b>{task_title}</b> (<i>{blocker}</i>) needs a new owner. I've told the lead."

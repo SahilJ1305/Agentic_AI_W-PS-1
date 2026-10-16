@@ -15,6 +15,7 @@ from app.api.sse import broadcaster
 from app.config import settings
 from app.db import repo
 from app.core.dependency_engine import recompute_all_readiness, compute_critical_path
+from app.core.taskview import load_view
 
 router = APIRouter(tags=["tasks"])
 log = logging.getLogger(__name__)
@@ -34,32 +35,51 @@ async def list_tasks(
 ):
     async with repo.db_context() as db:
         await visible_project(db, pid, user)
-        tasks = await repo.list_tasks(db, pid, status=status, owner_id=owner_id, readiness=readiness)
-        names = {
-            person["id"]: person["name"]
-            for person in await repo.list_participants(db, pid)
-        }
-        for task in tasks:
-            task["owner_name"] = names.get(task.get("owner_id"))
-            blockers = await repo.list_open_blockers_for_task(db, task["id"])
-            task["blocker"] = blockers[0]["description"] if blockers else None
-    return tasks
+        view = await load_view(db, pid)
+    return [
+        t for t in view.tasks
+        if (not status or t["status"] == status)
+        and (owner_id is None or t.get("owner_id") == owner_id)
+        and (not readiness or t["readiness"] == readiness)
+    ]
 
 
 @router.get("/tasks/{tid}")
 async def get_task(tid: int, user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
         task = await visible_task(db, tid, user)
-        events = await repo.list_task_events(db, tid)
+        cur = await db.execute(
+            """SELECT e.*, m.text AS source_message_text FROM task_events e
+               LEFT JOIN messages m ON m.id = e.source_message_id
+               WHERE e.task_id = ? ORDER BY e.created_at, e.id""",
+            (tid,),
+        )
+        events = [dict(r) for r in await cur.fetchall()]
+        for event in events:
+            event["task_key"] = task["key"]
         blockers = await repo.list_open_blockers_for_task(db, tid)
-        deps_up = await repo.list_dependencies_upstream(db, tid)
-        deps_dn = await repo.list_dependencies_downstream(db, tid)
+        keys = {t["id"]: t["key"] for t in await repo.list_tasks(db, task["project_id"])}
+        deps_up = [
+            {**d, "upstream_key": keys.get(d["upstream_task_id"]), "downstream_key": keys.get(d["downstream_task_id"])}
+            for d in await repo.list_dependencies_upstream(db, tid)
+        ]
+        deps_dn = [
+            {**d, "upstream_key": keys.get(d["upstream_task_id"]), "downstream_key": keys.get(d["downstream_task_id"])}
+            for d in await repo.list_dependencies_downstream(db, tid)
+        ]
+        messages = (
+            await repo.list_recent_messages(db, task["owner_id"], limit=20) if task.get("owner_id") else []
+        )
     return {
         "task": task,
         "events": events,
         "blockers": blockers,
         "upstream_deps": deps_dn,  # what this task waits for
         "downstream_deps": deps_up,  # what waits for this task
+        "messages": [
+            {k: m.get(k) for k in ("id", "direction", "text", "template_key", "created_at")}
+            for m in messages
+        ],
     }
 
 
@@ -127,6 +147,7 @@ async def patch_task(tid: int, req: PatchTaskRequest, user: CurrentUser = Depend
             await recompute_all_readiness(task["project_id"], db, now)
 
     await broadcaster.publish("task.updated", {
+        "project_id": task["project_id"],
         "task_key": task["key"],
         "status": req.status or task["status"],
         "reason": req.reason,
@@ -188,7 +209,7 @@ async def revert_event(tid: int, event_id: int, user: CurrentUser = Depends(curr
         )
         await repo.mark_event_reverted(db, event_id, revert_event_id=revert_id)
 
-    await broadcaster.publish("task.updated", {"task_key": task["key"], "reason": "reverted"})
+    await broadcaster.publish("task.updated", {"project_id": task["project_id"], "task_key": task["key"], "reason": "reverted"})
     return {"status": "reverted"}
 
 
@@ -211,11 +232,26 @@ async def participant_invite(participant_id: int, user: CurrentUser = Depends(cu
 async def list_blockers(pid: int, status: str = "open", user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
         await visible_project(db, pid, user)
-        tasks = await repo.list_tasks(db, pid)
-        result = []
-        for t in tasks:
-            if status == "open":
-                result.extend(await repo.list_open_blockers_for_task(db, t["id"]))
+        view = await load_view(db, pid)
+        if status != "open":
+            cur = await db.execute(
+                """SELECT b.* FROM blockers b JOIN tasks t ON t.id = b.task_id
+                   WHERE t.project_id = ? AND b.status = ? ORDER BY b.raised_at DESC""",
+                (pid, status),
+            )
+            rows = [dict(r) for r in await cur.fetchall()]
+        else:
+            rows = [b for blockers in view.open_blockers.values() for b in blockers]
+    result = []
+    for b in rows:
+        task, linked = view.task_by_id(b["task_id"]), view.task_by_id(b.get("linked_task_id"))
+        result.append({
+            **b,
+            "task_key": task["key"] if task else None,
+            "task_title": task["title"] if task else None,
+            "owner_name": task.get("owner_name") if task else None,
+            "linked_task_key": linked["key"] if linked else None,
+        })
     return result
 
 
@@ -226,7 +262,7 @@ async def resolve_blocker(bid: int, body: dict, user: CurrentUser = Depends(curr
         blocker = await repo.get_blocker(db, bid)
         if not blocker:
             raise HTTPException(404, "Blocker not found")
-        await visible_task(db, blocker["task_id"], user)
+        task = await visible_task(db, blocker["task_id"], user)
         await repo.resolve_blocker(db, bid, resolved_message_id=None, resolved_at=now)
         await repo.append_task_event(
             db,
@@ -237,7 +273,9 @@ async def resolve_blocker(bid: int, body: dict, user: CurrentUser = Depends(curr
             actor="lead",
             now=now,
         )
-    await broadcaster.publish("blocker.resolved", {"blocker_id": bid})
+    await broadcaster.publish("blocker.resolved", {
+        "project_id": task["project_id"], "blocker_id": bid, "task_key": task["key"],
+    })
     return {"status": "resolved"}
 
 

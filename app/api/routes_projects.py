@@ -21,6 +21,7 @@ from app.agents.schemas import PlanDraft
 from app.api.auth import CurrentUser, current_user, visible_project
 from app.api.sse import broadcaster
 from app.config import settings
+from app.core.taskview import load_view
 from app.core.dependency_engine import validate_graph, recompute_all_readiness, compute_critical_path
 from app.core.documents import (
     ensure_participants_from_spec,
@@ -63,17 +64,18 @@ async def create_project(req: CreateProjectRequest, user: CurrentUser = Depends(
 async def get_project(pid: int, user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
         project = await visible_project(db, pid, user)
-        tasks = await repo.list_tasks(db, pid)
-        by_status = {}
-        for t in tasks:
-            by_status.setdefault(t["status"], 0)
-            by_status[t["status"]] += 1
-        blockers = await repo.list_open_blockers(db, pid)
+        view = await load_view(db, pid)
+    by_status: dict[str, int] = {}
+    for t in view.tasks:
+        by_status[t["status"]] = by_status.get(t["status"], 0) + 1
     return {
         "project": project,
         "task_counts": by_status,
-        "total_tasks": len(tasks),
-        "open_blockers": len(blockers),
+        "total_tasks": len(view.tasks),
+        "open_blockers": sum(len(b) for b in view.open_blockers.values()),
+        "critical_path": view.critical_path,
+        "risks": [r.as_dict() for r in view.risks],
+        "progress": {"complete": by_status.get("complete", 0), "total": len(view.tasks)},
     }
 
 
@@ -189,7 +191,7 @@ async def _run_planner_bg(pid, project_name, spec_text, task_doc_text, roster):
                 llm_call_id=None,
                 now=now,
             )
-        await broadcaster.publish("plan.ready", {"draft_id": draft_id, "warnings_count": len(result.warnings)})
+        await broadcaster.publish("plan.ready", {"project_id": pid, "draft_id": draft_id, "warnings_count": len(result.warnings)})
     except LLMFailure as e:
         log.error("Planner LLM failure: %s", e)
         if task_doc_text and parse_task_table(task_doc_text):
@@ -200,9 +202,30 @@ async def _run_planner_bg(pid, project_name, spec_text, task_doc_text, roster):
                 await repo.update_project_status(db, pid, "active")
             await broadcaster.publish("plan.committed", {"project_id": pid, "imported": imported})
             return
-        await broadcaster.publish("plan.error", {"error": str(e)})
-    except Exception:
+        await broadcaster.publish("plan.error", {"project_id": pid, "error": str(e)})
+    except Exception as e:
         log.exception("Planner background task failed")
+        await broadcaster.publish("plan.error", {"project_id": pid, "error": f"Planner crashed: {e}"})
+
+
+@router.get("/{pid}/plan/latest")
+async def latest_plan_draft(pid: int, user: CurrentUser = Depends(current_user)):
+    """The newest draft still waiting for review, so the page can resume after a reload."""
+    async with repo.db_context() as db:
+        await visible_project(db, pid, user)
+        cur = await db.execute(
+            "SELECT * FROM plan_drafts WHERE project_id = ? AND status = 'review' ORDER BY id DESC LIMIT 1",
+            (pid,),
+        )
+        draft = await cur.fetchone()
+    if not draft:
+        raise HTTPException(404, "No draft waiting for review")
+    return {
+        "draft_id": draft["id"],
+        "draft": json.loads(draft["plan_json"]),
+        "validation": json.loads(draft["validation_json"]),
+        "status": draft["status"],
+    }
 
 
 @router.get("/{pid}/plan/{draft_id}")
@@ -282,11 +305,15 @@ async def commit_plan(
 
         # Create accepted dependencies
         accepted_set = {(u, d) for u, d in req.accepted_edge_pairs}
+        rejected_set = {(u, d) for u, d in req.rejected_edge_pairs}
         all_accepted = validate_graph(plan.dependencies, set(task_ids.keys()))
 
         for dep in all_accepted.accepted:
-            if req.accepted_edge_pairs and (dep.upstream, dep.downstream) not in accepted_set:
-                continue  # skip if lead rejected it via UI
+            pair = (dep.upstream, dep.downstream)
+            if pair in rejected_set:
+                continue  # the lead rejected this edge in the review screen
+            if req.accepted_edge_pairs and pair not in accepted_set:
+                continue  # the lead reviewed the list and left this one out
             up_id = task_ids.get(dep.upstream)
             dn_id = task_ids.get(dep.downstream)
             if up_id and dn_id:
@@ -307,6 +334,8 @@ async def commit_plan(
         for dep in all_accepted.proposed:
             if (dep.upstream, dep.downstream) in accepted_set:
                 state = "active"
+            elif (dep.upstream, dep.downstream) in rejected_set:
+                state = "rejected"
             else:
                 state = "proposed"
             up_id = task_ids.get(dep.upstream)
@@ -408,7 +437,15 @@ async def list_participants(pid: int, user: CurrentUser = Depends(current_user))
     async with repo.db_context() as db:
         await visible_project(db, pid, user)
         participants = await repo.list_participants(db, pid)
-    return [_with_invite(person) for person in participants]
+        tasks = await repo.list_tasks(db, pid)
+    result = []
+    for person in participants:
+        mine = [t for t in tasks if t.get("owner_id") == person["id"]]
+        person = _with_invite(person)
+        person["task_count"] = len(mine)
+        person["open_task_count"] = sum(t["status"] != "complete" for t in mine)
+        result.append(person)
+    return result
 
 
 def _with_invite(person: dict | None) -> dict | None:
@@ -425,8 +462,8 @@ def _with_invite(person: dict | None) -> dict | None:
 async def get_graph(pid: int, user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:
         await visible_project(db, pid, user)
-        tasks = await repo.list_tasks(db, pid)
-        deps = await repo.list_all_dependencies(db, pid)
+        view = await load_view(db, pid)
+    keys = {t["id"]: t["key"] for t in view.tasks}
     nodes = [
         {
             "id": t["id"],
@@ -435,20 +472,23 @@ async def get_graph(pid: int, user: CurrentUser = Depends(current_user)):
             "status": t["status"],
             "readiness": t["readiness"],
             "on_critical_path": bool(t["on_critical_path"]),
+            "owner_name": t.get("owner_name"),
         }
-        for t in tasks
+        for t in view.tasks
     ]
     edges = [
         {
             "id": d["id"],
             "upstream": d["upstream_task_id"],
             "downstream": d["downstream_task_id"],
+            "upstream_key": keys.get(d["upstream_task_id"]),
+            "downstream_key": keys.get(d["downstream_task_id"]),
             "type": d["type"],
             "source": d["source"],
             "state": d["state"],
             "confidence": d["confidence"],
             "reason": d.get("reason"),
         }
-        for d in deps
+        for d in view.deps
     ]
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "critical_path": view.critical_path}

@@ -63,7 +63,9 @@ async def health():
     else:
         result["opencode"] = {"status": "not configured"}
 
-    result["telegram"] = "polling"
+    from app.telegram.gateway import telegram_status
+
+    result["telegram"] = telegram_status()
     return result
 
 
@@ -88,8 +90,7 @@ async def run_checkin(req: CheckinRequest, user: CurrentUser = Depends(current_u
 async def tick():
     """Fast-forward scheduler (for demos)."""
     from app.scheduler.jobs import run_nudge_checks
-    await run_nudge_checks()
-    return {"status": "ticked"}
+    return {"status": "ticked", "escalations": await run_nudge_checks()}
 
 
 @router.post("/admin/reset-demo")

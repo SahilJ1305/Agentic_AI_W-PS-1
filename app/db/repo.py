@@ -73,6 +73,7 @@ async def init_db(db_path: str | None = None) -> None:
 _ADDED_COLUMNS = [
     ("projects", "owner_user_id", "INTEGER"),
     ("participants", "github_username", "TEXT"),
+    ("outbox", "project_id", "INTEGER"),
 ]
 
 
@@ -124,6 +125,15 @@ async def list_projects(db: aiosqlite.Connection, *, user_id: int | None = None)
 async def get_project(db: aiosqlite.Connection, project_id: int) -> dict | None:
     cur = await db.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
     return _row(await cur.fetchone())
+
+
+async def get_project_by_group(db: aiosqlite.Connection, group_chat_id: int) -> dict | None:
+    cur = await db.execute("SELECT * FROM projects WHERE group_chat_id = ?", (group_chat_id,))
+    return _row(await cur.fetchone())
+
+
+async def set_project_group(db: aiosqlite.Connection, project_id: int, group_chat_id: int | None) -> None:
+    await db.execute("UPDATE projects SET group_chat_id = ? WHERE id = ?", (group_chat_id, project_id))
 
 
 async def update_project_status(db: aiosqlite.Connection, project_id: int, status: str) -> None:
@@ -200,6 +210,10 @@ async def onboard_participant(
            WHERE id = ?""",
         (chat_id, onboarded_at, onboarded_at, participant_id),
     )
+
+
+async def set_paused_until(db: aiosqlite.Connection, participant_id: int, until: str | None) -> None:
+    await db.execute("UPDATE participants SET paused_until = ? WHERE id = ?", (until, participant_id))
 
 
 async def touch_participant(db: aiosqlite.Connection, participant_id: int, *, last_seen_at: str) -> None:
@@ -519,7 +533,8 @@ async def get_blocker(db: aiosqlite.Connection, blocker_id: int) -> dict | None:
 
 async def list_open_blockers_for_task(db: aiosqlite.Connection, task_id: int) -> list[dict]:
     cur = await db.execute(
-        "SELECT * FROM blockers WHERE task_id = ? AND status = 'open'", (task_id,)
+        "SELECT * FROM blockers WHERE task_id = ? AND status IN ('open', 'pending_confirmation')",
+        (task_id,)
     )
     return _rows(await cur.fetchall())
 
@@ -547,6 +562,10 @@ async def resolve_blocker(
     )
 
 
+async def reopen_blocker(db: aiosqlite.Connection, blocker_id: int) -> None:
+    await db.execute("UPDATE blockers SET status = 'open' WHERE id = ?", (blocker_id,))
+
+
 async def set_blocker_pending_confirmation(
     db: aiosqlite.Connection, blocker_id: int
 ) -> None:
@@ -560,7 +579,7 @@ async def list_open_blockers(db: aiosqlite.Connection, project_id: int) -> list[
     cur = await db.execute(
         """SELECT b.* FROM blockers b
            JOIN tasks t ON t.id = b.task_id
-           WHERE t.project_id = ? AND b.status = 'open'""",
+           WHERE t.project_id = ? AND b.status IN ('open', 'pending_confirmation')""",
         (project_id,),
     )
     return _rows(await cur.fetchall())
@@ -585,6 +604,11 @@ async def create_pending_question(
         (participant_id, task_id, kind, payload_json, message_id, now),
     )
     return cur.lastrowid
+
+
+async def get_question(db: aiosqlite.Connection, question_id: int) -> dict | None:
+    cur = await db.execute("SELECT * FROM pending_questions WHERE id = ?", (question_id,))
+    return _row(await cur.fetchone())
 
 
 async def get_open_question(
@@ -732,17 +756,19 @@ async def enqueue_message(
     buttons_json: str | None = None,
     dedupe_key: str | None = None,
     not_before: str | None = None,
+    project_id: int | None = None,
     now: str,
 ) -> int | None:
     """Insert into outbox. Returns None if dedupe_key already exists."""
     try:
         cur = await db.execute(
             """INSERT INTO outbox
-               (participant_id, chat_id, template_key, text, buttons_json,
+               (project_id, participant_id, chat_id, template_key, text, buttons_json,
                 dedupe_key, not_before, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (participant_id, chat_id, template_key, text, buttons_json,
-             dedupe_key, not_before, now),
+               VALUES (COALESCE(?, (SELECT project_id FROM participants WHERE id = ?)),
+                       ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (project_id, participant_id, participant_id, chat_id, template_key, text,
+             buttons_json, dedupe_key, not_before, now),
         )
         return cur.lastrowid
     except sqlite3.IntegrityError:

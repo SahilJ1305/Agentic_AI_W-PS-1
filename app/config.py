@@ -94,6 +94,10 @@ class Settings(BaseSettings):
         return 4.0 if self.demo_mode else self.blocker_escalate_min
 
     @property
+    def effective_risk_blocked_min(self) -> float:
+        return 2.0 if self.demo_mode else self.risk_blocked_min
+
+    @property
     def effective_quiet_min(self) -> float:
         return 0.5 if self.demo_mode else self.quiet_min
 
