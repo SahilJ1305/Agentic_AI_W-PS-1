@@ -1,0 +1,49 @@
+name: CI
+
+# Tests and builds run here, on GitHub, so nobody has to run them (or the bot) locally.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api:
+    name: API, bot and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      # No Telegram token or LLM key is needed: the tests use a pretend Telegram and a scripted model.
+      - run: python -m pytest -q -p no:warnings
+
+  dashboard:
+    name: Dashboard build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  images:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the images (nothing is pushed)
+        env:
+          POSTGRES_PASSWORD: ci-only-not-a-secret
+        run: |
+          touch .env
+          docker compose -f docker-compose.prod.yml build

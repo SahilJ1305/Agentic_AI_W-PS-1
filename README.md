@@ -13,33 +13,61 @@ website. The lead can also act from the website, and the team hears about it on 
 Agents propose, code decides: the LLM never writes to the database. Every change has a reason, a
 source message and a rule behind it, and is shown on the dashboard.
 
-## Run it
+## Deploy it (the bot runs in ONE place, not on laptops)
 
-You need Python 3.11+, Node 20+, and Docker (for the login database). Copy `.env.example` to `.env`.
+On any Linux server or VM with Docker (a small cloud VM is enough):
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -r requirements.txt      # Windows: .venv\Scripts\...
-docker compose up -d                  # Postgres, login API (:8001) and the website (:5173)
-.venv/bin/python -m app.db.seed_demo  # optional: the FestPass demo project
-.venv/bin/python -m app.main          # Cadence API, bot and scheduler (:8000)
+git clone https://github.com/SahilJ1305/Cadence.git && cd Cadence
+cp .env.example .env        # then fill in the values below
+docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-Open http://localhost:5173, sign up, and the board is there. `SECRET_KEY` in `.env` must be the same
-random value for the login API and Cadence.
+Fill in `.env`:
 
-### Create the Telegram bot (2 minutes, you have to do this part)
+| Setting | What to put |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | The token from @BotFather (see below). **Only on this server.** |
+| `SECRET_KEY` | One long random value: `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| `POSTGRES_PASSWORD` | Any strong password for the login database |
+| `LLM_PROVIDER` + keys | `azure` with `AZURE_AI_*`, or `ollama` with `OLLAMA_BASE_URL` and model names |
+| `FRONTEND_URL`, `PUBLIC_AUTH_API_URL`, `PUBLIC_CADENCE_API_URL` | The public addresses of the dashboard and the two APIs |
+| `DEMO_MODE` | `false` for a real team (see below) |
+| `GITHUB_REPO`, `GITHUB_TOKEN` | Optional: lets Cadence check "done" claims against commits |
+
+Then `python -m scripts.setup_bot` once (from any machine that has the token) to publish the bot's menu
+and confirm nobody else is polling it. The dashboard is on port 80, the API on 8000, logins on 8001; put
+a reverse proxy with HTTPS in front for real use. Back up the `cadence_data` volume (the project database).
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the tests and builds every image on each push, so
+nothing needs to be run locally to know the code is healthy.
+
+### Develop on your own machine
+
+You can run the dashboard and API without the bot: leave `TELEGRAM_BOT_TOKEN` empty.
+
+```bash
+python -m venv .venv && .venv/bin/pip install -r requirements.txt     # Windows: .venv\Scripts\...
+DB_PORT=5433 docker compose up -d db backend      # login service (use DB_PORT if 5432 is taken)
+.venv/bin/python -m app.db.seed_demo              # optional: the FestPass demo project
+.venv/bin/python -m app.main                      # API on :8000
+cd frontend && npm install && npm run dev         # dashboard on :5173
+```
+
+Want to try the bot too? Create **your own** bot in @BotFather and use its token only in your `.env`.
+
+### Create the Telegram bot (2 minutes, a person has to do this)
 
 1. In Telegram open **@BotFather**, send `/newbot`, pick a name, and copy the token.
 2. Run `python -m scripts.setup_bot <TOKEN>`. It checks the token, saves it to `.env`, publishes the
-   command menu and description, removes any webhook, and tells you if another program is already
-   using the token.
-3. Start the app. Each teammate opens their invite link from the **Team** tab, which looks like
-   `https://t.me/<bot>?start=<code>`.
+   command menu and description, removes any webhook, and tells you if another program already polls it.
+3. Each teammate opens their invite link from the **Team** tab (`https://t.me/<bot>?start=<code>`).
 4. Optional: add the bot to your team group, and the lead sends `/linkgroup` there for the daily digest.
 
-**One token, one running copy.** Telegram lets only one program poll a bot. If two copies run, both
-get `409 Conflict`. Give every developer their own bot, or revoke the token in BotFather
-(`/revoke`) if it has leaked. Never paste logs that contain the token.
+**One token, one running copy.** If two copies poll the same token, Telegram answers both with
+`409 Conflict`; messages are answered twice, or by a copy whose database has different data. This is
+the usual cause of "everyone got duplicate messages" and "I see someone else's tasks". Never share the
+token, never paste logs that contain it, and `/revoke` it in BotFather if it leaks.
 
 ## What the team can do on Telegram
 
