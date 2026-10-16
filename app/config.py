@@ -22,6 +22,16 @@ class Settings(BaseSettings):
     database_path: str = "./data/cadence.db"
     timezone: str = "Asia/Kolkata"
 
+    # ---- LLM: which primary provider --------------------------------
+    llm_provider: str = "ollama"            # "ollama" or "azure"
+
+    # ---- LLM: Azure AI Foundry --------------------------------------
+    azure_ai_endpoint: str = ""
+    azure_ai_api_key: str = ""
+    azure_ai_api_version: str = ""
+    azure_coordinator_deployment: str = ""
+    azure_planner_deployment: str = ""
+
     # ---- LLM: Ollama primary ----------------------------------------
     ollama_base_url: str = "http://localhost:11435"
     coordinator_model: str = ""
@@ -71,6 +81,14 @@ class Settings(BaseSettings):
     @property
     def effective_quiet_min(self) -> float:
         return 0.5 if self.demo_mode else self.quiet_min
+
+    @field_validator("llm_provider")
+    @classmethod
+    def known_provider(cls, value: str) -> str:
+        value = (value or "ollama").strip().lower()
+        if value not in ("ollama", "azure"):
+            raise ValueError("LLM_PROVIDER must be ollama or azure")
+        return value
 
     @field_validator("telegram_group_chat_id", mode="before")
     @classmethod

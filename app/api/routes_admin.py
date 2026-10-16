@@ -36,12 +36,20 @@ async def health():
     except Exception as e:
         result["db"] = f"error: {e}"
 
-    # Ollama
-    try:
-        models = await _ollama.list_models()
-        result["ollama"] = {"status": "ok", "models": models}
-    except Exception as e:
-        result["ollama"] = {"status": "error", "detail": str(e)}
+    result["llm_provider"] = settings.llm_provider
+    if settings.llm_provider == "azure":
+        configured = bool(settings.azure_ai_endpoint and settings.azure_ai_api_key)
+        result["azure"] = {
+            "status": "configured" if configured else "missing endpoint or key",
+            "coordinator": settings.azure_coordinator_deployment or None,
+            "planner": settings.azure_planner_deployment or None,
+        }
+    else:
+        try:
+            models = await _ollama.list_models()
+            result["ollama"] = {"status": "ok", "models": models}
+        except Exception as e:
+            result["ollama"] = {"status": "error", "detail": str(e)}
 
     # OpenCode
     if settings.opencode_api_key:

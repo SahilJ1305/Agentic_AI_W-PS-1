@@ -92,7 +92,14 @@ async def lifespan(app: FastAPI):
         log.warning("TELEGRAM_BOT_TOKEN is empty. Dashboard is live; the bot is not polling.")
 
     start_scheduler()
-    asyncio.create_task(_warm_ollama())
+    if settings.llm_provider == "azure":
+        log.info(
+            "LLM provider: Azure (coordinator=%s, planner=%s)",
+            settings.azure_coordinator_deployment or "unset",
+            settings.azure_planner_deployment or "unset",
+        )
+    else:
+        asyncio.create_task(_warm_ollama())
     try:
         yield
     finally:
