@@ -227,12 +227,14 @@ class NotificationBatch:
             # Create pending question if needed
             pq_id: int | None = None
             if msg.question_kind:
+                payload = dict(msg.context)
+                payload["_template_key"] = msg.template_key
                 pq_id = await repo.create_pending_question(
                     db,
                     participant_id=msg.participant_id,
                     task_id=msg.question_task_id,
                     kind=msg.question_kind,
-                    payload_json=json.dumps(msg.context),
+                    payload_json=json.dumps(payload, default=str),
                     now=now,
                 )
 

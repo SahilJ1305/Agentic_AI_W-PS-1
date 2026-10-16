@@ -14,11 +14,18 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File,
 from fastapi.responses import StreamingResponse, PlainTextResponse
 from pydantic import BaseModel
 
+import secrets
+
 from app.agents.planner import run_planner
 from app.agents.schemas import PlanDraft
 from app.api.sse import broadcaster
 from app.config import settings
 from app.core.dependency_engine import validate_graph, recompute_all_readiness, compute_critical_path
+from app.core.documents import (
+    ensure_participants_from_spec,
+    import_task_document,
+    parse_task_table,
+)
 from app.db import repo
 from app.llm.gateway import LLMFailure
 
@@ -33,6 +40,12 @@ def _now() -> str:
 class CreateProjectRequest(BaseModel):
     name: str
     timezone: str = "Asia/Kolkata"
+
+
+@router.get("")
+async def list_projects():
+    async with repo.db_context() as db:
+        return await repo.list_projects(db)
 
 
 @router.post("")
@@ -67,22 +80,23 @@ async def get_project(pid: int):
 async def upload_document(
     pid: int,
     kind: Annotated[str, Form()],
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
 ):
-    """Upload a spec, task_doc, or roster document."""
+    """Upload a spec, task_doc, or roster. The original text is stored unchanged."""
     allowed_kinds = ("spec", "task_doc", "roster")
     if kind not in allowed_kinds:
         raise HTTPException(400, f"kind must be one of {allowed_kinds}")
 
     content_bytes = await file.read()
-    # For PDF, extract text (basic: just decode as utf-8 for now)
     try:
         content = content_bytes.decode("utf-8")
     except UnicodeDecodeError:
-        raise HTTPException(400, "Only UTF-8 text files are supported. PDF requires pdfminer.")
+        raise HTTPException(400, "Only UTF-8 text files are supported.")
 
     sha256 = hashlib.sha256(content_bytes).hexdigest()
     now = _now()
+    imported = None
 
     async with repo.db_context() as db:
         project = await repo.get_project(db, pid)
@@ -98,7 +112,27 @@ async def upload_document(
             sha256=sha256,
             uploaded_at=now,
         )
-    return {"document_id": doc_id, "kind": kind, "sha256": sha256}
+        docs = await repo.list_source_documents(db, pid)
+        spec_text = next((doc["content"] for doc in docs if doc["kind"] == "spec"), None)
+        task_text = next(
+            (doc["content"] for doc in docs if parse_task_table(doc["content"])),
+            None,
+        )
+        if spec_text:
+            await ensure_participants_from_spec(db, pid, spec_text)
+        if task_text:
+            imported = await import_task_document(db, pid, task_text, now)
+            await repo.update_project_status(db, pid, "active")
+        elif kind == "spec":
+            participants = await repo.list_participants(db, pid)
+            roster = [
+                {"name": person["name"], "role": person["role"], "skills": person.get("skills", "")}
+                for person in participants
+            ]
+            background_tasks.add_task(
+                _run_planner_bg, pid, project["name"], content, None, roster
+            )
+    return {"document_id": doc_id, "kind": kind, "sha256": sha256, "imported": imported}
 
 
 @router.post("/{pid}/plan")
@@ -156,6 +190,14 @@ async def _run_planner_bg(pid, project_name, spec_text, task_doc_text, roster):
         await broadcaster.publish("plan.ready", {"draft_id": draft_id, "warnings_count": len(result.warnings)})
     except LLMFailure as e:
         log.error("Planner LLM failure: %s", e)
+        if task_doc_text and parse_task_table(task_doc_text):
+            async with repo.db_context() as db:
+                if spec_text:
+                    await ensure_participants_from_spec(db, pid, spec_text)
+                imported = await import_task_document(db, pid, task_doc_text, now)
+                await repo.update_project_status(db, pid, "active")
+            await broadcaster.publish("plan.committed", {"project_id": pid, "imported": imported})
+            return
         await broadcaster.publish("plan.error", {"error": str(e)})
     except Exception:
         log.exception("Planner background task failed")
@@ -300,11 +342,49 @@ async def stream_events(pid: int):
     )
 
 
+class CreateParticipantRequest(BaseModel):
+    name: str
+    role: str = "member"
+    skills: str | None = None
+    telegram_username: str | None = None
+
+
+@router.post("/{pid}/participants")
+async def add_participant(pid: int, req: CreateParticipantRequest):
+    if req.role not in ("lead", "member"):
+        raise HTTPException(400, "role must be lead or member")
+    async with repo.db_context() as db:
+        project = await repo.get_project(db, pid)
+        if not project:
+            raise HTTPException(404, "Project not found")
+        participant_id = await repo.create_participant(
+            db,
+            project_id=pid,
+            name=req.name,
+            role=req.role,
+            skills=req.skills,
+            invite_code=secrets.token_urlsafe(12),
+            telegram_username=(req.telegram_username or "").lstrip("@") or None,
+        )
+        participant = await repo.get_participant(db, participant_id)
+    return _with_invite(participant)
+
+
 @router.get("/{pid}/participants")
 async def list_participants(pid: int):
     async with repo.db_context() as db:
         participants = await repo.list_participants(db, pid)
-    return participants
+    return [_with_invite(person) for person in participants]
+
+
+def _with_invite(person: dict | None) -> dict | None:
+    if not person:
+        return None
+    username = settings.telegram_bot_username
+    code = person.get("invite_code")
+    person = dict(person)
+    person["deep_link"] = f"https://t.me/{username}?start={code}" if code else None
+    return person
 
 
 @router.get("/{pid}/graph")

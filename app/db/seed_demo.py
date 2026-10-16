@@ -11,14 +11,19 @@ Use --force to drop and recreate it.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import secrets
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import aiosqlite
 
 from app.config import settings
+from app.core.dependency_engine import recompute_all_readiness
 from app.db import repo
+
+_DOCS = Path(__file__).resolve().parents[2] / "docs"
 
 # ── FestPass task definitions ─────────────────────────────────────────────────
 
@@ -143,19 +148,16 @@ async def seed(force: bool = False) -> None:
         # Check if already seeded
         cur = await db.execute("SELECT id FROM projects WHERE name = 'FestPass' LIMIT 1")
         existing = await cur.fetchone()
+        preserved: dict[str, dict] = {}
         if existing:
             if not force:
                 print("FestPass already seeded. Use --force to reset.")
                 return
-            # Drop everything for this project
             pid = existing["id"]
-            for tbl in [
-                "outbox", "task_events", "pending_questions", "blockers",
-                "dependencies", "messages", "tasks", "milestones",
-                "plan_drafts", "source_documents", "participants",
-            ]:
-                await db.execute(f"DELETE FROM {tbl} WHERE project_id = ?", (pid,))
-            await db.execute("DELETE FROM projects WHERE id = ?", (pid,))
+            people = await repo.list_participants(db, pid)
+            for person in people:
+                preserved[person["name"]] = person
+            await _wipe_project(db, pid)
             print(f"Dropped existing FestPass project (id={pid}).")
 
         # Create project
@@ -177,7 +179,8 @@ async def seed(force: bool = False) -> None:
         participant_ids: dict[str, int] = {}
         invite_codes: dict[str, str] = {}
         for p in PARTICIPANTS:
-            code = secrets.token_urlsafe(12)
+            saved = preserved.get(p["name"]) or {}
+            code = saved.get("invite_code") or secrets.token_urlsafe(12)
             pid = await repo.create_participant(
                 db,
                 project_id=project_id,
@@ -185,7 +188,15 @@ async def seed(force: bool = False) -> None:
                 role=p["role"],
                 skills=p["skills"],
                 invite_code=code,
+                telegram_username=saved.get("telegram_username"),
             )
+            if saved.get("telegram_chat_id"):
+                await repo.onboard_participant(
+                    db,
+                    pid,
+                    chat_id=saved["telegram_chat_id"],
+                    onboarded_at=saved.get("onboarded_at") or now,
+                )
             participant_ids[p["name"]] = pid
             invite_codes[p["name"]] = code
 
@@ -245,14 +256,8 @@ async def seed(force: bool = False) -> None:
                     now=now,
                 )
 
-        # Compute initial readiness
-        # T5 depends on T3 (pending) → waiting
-        # T7 depends on T5 (pending) → waiting
-        # T8 depends on T5, T7 → waiting
-        waiting_keys = {"T5", "T7", "T8"}
-        for key in waiting_keys:
-            tid = task_ids[key]
-            await repo.set_task_readiness(db, tid, "waiting", now)
+        await recompute_all_readiness(project_id, db, now)
+        await _store_demo_documents(db, project_id, now)
 
         print("\nParticipant invite codes:")
         for name, code in invite_codes.items():
@@ -260,6 +265,57 @@ async def seed(force: bool = False) -> None:
             print(f"  {name:<6} → t.me/{bot}?start={code}")
 
         print(f"\n✓ Seeded FestPass: {len(task_ids)} tasks, {len(milestone_ids)} milestones, {len(participant_ids)} participants.")
+
+
+async def _wipe_project(db: aiosqlite.Connection, project_id: int) -> None:
+    """Delete a project in foreign-key order. outbox has no project_id column."""
+    task_rows = await (await db.execute(
+        "SELECT id FROM tasks WHERE project_id = ?", (project_id,)
+    )).fetchall()
+    person_rows = await (await db.execute(
+        "SELECT id FROM participants WHERE project_id = ?", (project_id,)
+    )).fetchall()
+    task_ids = [row["id"] for row in task_rows]
+    person_ids = [row["id"] for row in person_rows]
+
+    async def delete_in(sql: str, ids: list[int]) -> None:
+        if not ids:
+            return
+        marks = ",".join("?" * len(ids))
+        await db.execute(f"{sql} ({marks})", ids)
+
+    await delete_in("DELETE FROM outbox WHERE participant_id IN", person_ids)
+    await delete_in("DELETE FROM pending_questions WHERE participant_id IN", person_ids)
+    await delete_in("DELETE FROM task_events WHERE task_id IN", task_ids)
+    await delete_in("DELETE FROM blockers WHERE task_id IN", task_ids)
+    await db.execute("DELETE FROM dependencies WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM reports WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM messages WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM tasks WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM milestones WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM plan_drafts WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM source_documents WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM participants WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+
+
+async def _store_demo_documents(db: aiosqlite.Connection, project_id: int, now: str) -> None:
+    """Keep the original demo spec and task doc, unchanged, on the project."""
+    files = (("spec", _DOCS / "demo-spec.md"), ("task_doc", _DOCS / "demo-tasks.md"))
+    for kind, path in files:
+        if not path.exists():
+            continue
+        content = path.read_text()
+        await repo.save_source_document(
+            db,
+            project_id=project_id,
+            kind=kind,
+            filename=path.name,
+            mime_type="text/markdown",
+            content=content,
+            sha256=hashlib.sha256(content.encode()).hexdigest(),
+            uploaded_at=now,
+        )
 
 
 if __name__ == "__main__":

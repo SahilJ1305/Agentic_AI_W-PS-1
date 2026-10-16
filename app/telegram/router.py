@@ -134,6 +134,7 @@ async def _process_burst(
             text=burst_text,
             now=now,
         )
+        await db.commit()
         await sse_publish("message.in", {
             "participant": sender["name"],
             "text": burst_text[:100],
@@ -189,6 +190,7 @@ async def _process_burst(
             (interpretation.model_dump_json(), msg_id),
         )
 
+        await db.commit()
         await sse_publish("interpretation", {
             "message_id": msg_id,
             "intent": interpretation.intent,
@@ -205,6 +207,7 @@ async def _process_burst(
             now=now,
         )
 
+        await db.commit()
         await sse_publish("interpretation", {
             "message_id": msg_id,
             "intent": interpretation.intent,
@@ -213,7 +216,7 @@ async def _process_burst(
         })
 
         # ── Close pending question if answered ────────────────────────────────
-        if open_pq and (decision.approved or decision.clarifications == []):
+        if open_pq and decision.approved:
             await repo.close_question(db, open_pq["id"], answered_at=now)
 
         # ── Execute approved updates ──────────────────────────────────────────
@@ -224,10 +227,76 @@ async def _process_burst(
         await decision.notifications.flush(db, now=now, source_msg_id=msg_id)
 
 
+async def apply_explicit_status(
+    *,
+    participant_id: int,
+    project_id: int,
+    task_key: str,
+    status: str,
+    text: str,
+    telegram_message_id: int,
+    sse_publish,
+    blocker_description: str | None = None,
+) -> str:
+    """Apply a button or slash-command status through the Policy Engine, skipping the LLM."""
+    from app.agents.schemas import BlockerOut, Interpretation, TaskUpdate
+
+    now = datetime.now(timezone.utc).isoformat()
+    blocker = None
+    if status == "blocked" and blocker_description:
+        blocker = BlockerOut(description=blocker_description, kind="external", match_confidence=1.0)
+    interpretation = Interpretation(
+        intent="blocker_report" if status == "blocked" else "status_update",
+        updates=[TaskUpdate(
+            task_key=task_key,
+            task_match_confidence=1.0,
+            status=status,  # type: ignore[arg-type]
+            status_confidence=1.0,
+            blocker=blocker,
+            evidence=text,
+        )],
+        raw_message=text,
+    )
+    async with repo.db_context() as db:
+        sender = await repo.get_participant(db, participant_id)
+        if not sender:
+            return "You're not in this project."
+        task = await repo.get_task_by_key(db, project_id, task_key)
+        if not task or task.get("owner_id") != participant_id:
+            return f"Task {task_key} not found or not yours."
+        msg_id = await repo.save_message(
+            db,
+            project_id=project_id,
+            participant_id=participant_id,
+            direction="in",
+            telegram_message_id=telegram_message_id,
+            text=text,
+            now=now,
+        )
+        decision = await policy_apply(
+            interpretation=interpretation,
+            sender=sender,
+            project_id=project_id,
+            source_message_id=msg_id,
+            db=db,
+            now=now,
+        )
+        open_pq = await repo.get_open_question(db, participant_id)
+        if open_pq and decision.approved:
+            await repo.close_question(db, open_pq["id"], answered_at=now)
+        for upd in decision.approved:
+            await _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_publish)
+        await decision.notifications.flush(db, now=now, source_msg_id=msg_id)
+        await db.commit()
+    if decision.approved and decision.approved[0].new_status:
+        return f"{task_key} is now {decision.approved[0].new_status}."
+    if decision.clarifications:
+        return "I need one more detail before I change that task."
+    return f"No change recorded for {task_key}."
+
+
 async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_publish):
     """Write an approved update to the DB and trigger propagation."""
-    from app.core.policy import ApprovedUpdate  # avoid circular at module level
-
     task = await repo.get_task(db, upd.task_id)
     if not task:
         return
@@ -270,7 +339,8 @@ async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_
         log.warning("Version conflict on task %s — skipping", upd.task_key)
         return
 
-    # Audit event
+    # Audit event — every status change and every note-only update.
+    event_id = None
     if upd.new_status and upd.new_status != upd.old_status:
         event_id = await repo.append_task_event(
             db,
@@ -278,6 +348,18 @@ async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_
             event_type="status_changed",
             old_value=upd.old_status,
             new_value=upd.new_status,
+            reason=upd.reason,
+            actor="coordinator",
+            source_message_id=msg_id,
+            confidence=upd.confidence,
+            now=now,
+        )
+    elif upd.progress_note or upd.eta:
+        event_id = await repo.append_task_event(
+            db,
+            task_id=upd.task_id,
+            event_type="note_added",
+            new_value=upd.progress_note or upd.eta,
             reason=upd.reason,
             actor="coordinator",
             source_message_id=msg_id,
@@ -308,6 +390,14 @@ async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_
             now=now,
         )
 
+        await db.commit()
+        await sse_publish("blocker.raised", {
+            "blocker_id": blocker_id,
+            "task_key": upd.task_key,
+            "description": upd.blocker_description,
+            "kind": upd.blocker_kind or "external",
+        })
+
         # Runtime edge (R11)
         if upd.blocker_linked_task_id:
             await repo.create_dependency(
@@ -323,13 +413,13 @@ async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_
                 created_by_message_id=msg_id,
                 now=now,
             )
+            await db.commit()
             await sse_publish("dependency.changed", {
                 "upstream_task_id": upd.blocker_linked_task_id,
                 "downstream_task_id": upd.task_id,
                 "source": "runtime",
                 "state": "active",
             })
-
         # Propagate blocker
         batch = await on_blocker_raised(blocker_id, db, now)
         await batch.flush(db, now=now, source_msg_id=msg_id)
@@ -350,15 +440,32 @@ async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_
             )
             await sse_publish("blocker.resolved", {"task_id": upd.task_id})
 
-    # Dependency propagation on completion
+    # Completing a task closes the blocker that was holding it.
     if upd.new_status == "complete" and upd.old_status != "complete":
+        for blocker in await repo.list_open_blockers_for_task(db, upd.task_id):
+            await repo.resolve_blocker(db, blocker["id"], resolved_message_id=msg_id, resolved_at=now)
+            await repo.append_task_event(
+                db,
+                task_id=upd.task_id,
+                event_type="blocker_resolved",
+                old_value=blocker["description"],
+                reason="Owner reported the task complete",
+                actor="coordinator",
+                source_message_id=msg_id,
+                now=now,
+            )
         batch = await on_task_completed(upd.task_id, msg_id, db, now)
         await batch.flush(db, now=now, source_msg_id=msg_id)
 
+    fresh = await repo.get_task(db, upd.task_id)
+    await db.commit()
     await sse_publish("task.updated", {
         "task_key": upd.task_key,
-        "status": upd.new_status or task["status"],
+        "status": (fresh or task)["status"],
+        "readiness": (fresh or task)["readiness"],
+        "flags": json.loads((fresh or task).get("flags_json") or "[]"),
         "changed_fields": ["status"] if upd.new_status else ["progress_note"],
+        "event_id": event_id,
         "reason": upd.reason,
         "rule_fired": upd.rule_fired,
     })

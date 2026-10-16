@@ -1,0 +1,92 @@
+ONBOARD_WELCOME:
+  text: |
+    Hi {name}! I'm Cadence, the coordinator for <b>{project}</b>.
+    I'll check in on your tasks and keep everyone in sync. You own:
+    {task_list}
+    Reply in plain words any time: "done", "stuck on X", "kal tak ho jayega".
+
+ONBOARD_TASK_ASSIGNED:
+  text: "{lead} assigned you <b>{task_key} · {task_title}</b> (due {deadline_rel})."
+
+FOLLOWUP_SINGLE:
+  text: "Hey {name}! How's <b>{task_key} · {task_title}</b> going? Due {deadline_rel}."
+
+FOLLOWUP_MULTI:
+  text: |
+    Hey {name}, quick check on your tasks:
+    {numbered_task_list}
+    Reply with an update on any of them.
+
+NUDGE_1:
+  text: "Hi {name}, just bumping this: any update on <b>{task_title}</b>? Even \"not started yet\" helps."
+
+NUDGE_2:
+  text: "{name}, I'll let {lead} know I couldn't reach you about <b>{task_title}</b> in {minutes} min. A one-word reply is enough!"
+
+ESCALATE_SILENCE:
+  text: "Heads up {lead}: no reply from {name} on <b>{task_key} · {task_title}</b> after 2 reminders. Due {deadline_rel}{critical_path_note}."
+
+ACK_PROGRESS:
+  text: "Got it: <b>{task_title}</b> is In progress{eta_part}."
+
+ACK_BLOCKED:
+  text: "Noted: <b>{task_title}</b> is Blocked on <i>{blocker}</i>. {routing_part}"
+
+UNBLOCK_REQUEST:
+  text: "Hi {unblocker}, {name} is blocked on <b>{task_title}</b>, waiting for <i>{blocker}</i>. Looks linked to your <b>{upstream_title}</b>. Any ETA?"
+
+ACK_COMPLETE_NEXT:
+  text: |
+    Nice work! <b>{task_title}</b> is Complete.{unblocked_part}
+    Next up for you: <b>{next_key} · {next_title}</b> (due {next_deadline_rel}).
+
+ACK_COMPLETE_ALL_CLEAR:
+  text: "Nice work! <b>{task_title}</b> is Complete. You have nothing else open.{offer_part}"
+
+UNBLOCKED_DOWNSTREAM:
+  text: "Good news {name}: {upstream_owner} finished <b>{upstream_title}</b>, so <b>{task_title}</b> is ready to start."
+
+FYI_UPSTREAM_DONE:
+  text: "FYI: {upstream_owner} finished <b>{upstream_title}</b>, which feeds into your <b>{task_title}</b>."
+
+CONFIRM_UNBLOCKED:
+  text: "{name}, {upstream_owner} marked <b>{upstream_title}</b> done. Does that clear your blocker (<i>{blocker}</i>)?"
+
+CLARIFY_TASK:
+  text: "Thanks! Which task is that about?"
+
+CLARIFY_STATUS:
+  text: "{clarification_question}"
+
+ASK_BLOCKER:
+  text: "Sorry to hear that. What's blocking <b>{task_title}</b>?"
+
+VERIFY_COMPLETION:
+  text: "Great! Can you share a link for <b>{task_title}</b> (PR, commit, demo URL or file)? I've marked it Complete (unverified) until then."
+
+DEPENDENCY_CONFLICT:
+  text: "You said <b>{task_title}</b> is done, but it depends on <b>{upstream_title}</b>, which is still {upstream_status}. Is it fully working end-to-end?"
+
+PEER_CLAIM_CONFIRM:
+  text: "{reporter} says <b>{task_title}</b> is {claimed_status}. Is that right?"
+
+CONFIRM_REOPEN:
+  text: "<b>{task_title}</b> was marked Complete. Should I reopen it?"
+
+REOPENED_ALERT:
+  text: "Heads up: <b>{upstream_title}</b> was reopened ({reason}). Your <b>{task_title}</b> may be affected."
+
+CORRECTION_ACK:
+  text: "Undone: <b>{task_title}</b> is back to {status}."
+
+HANDOFF_TO_LEAD:
+  text: "{name} can't continue <b>{task_title}</b>: <i>{reason}</i>. Suggested new owner: {suggested_owner} (skills: {skills}, {open_count} open tasks)."
+
+NOT_UNDERSTOOD:
+  text: "I didn't quite catch that. Which fits <b>{task_title}</b>?"
+
+OFF_TOPIC:
+  text: "I only keep track of project tasks. Send /mytasks to see yours."
+
+MILESTONE_DONE:
+  text: "Milestone <b>{milestone}</b> is complete! {done}/{total} tasks done overall."

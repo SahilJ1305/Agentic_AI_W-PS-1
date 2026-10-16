@@ -64,63 +64,15 @@ class CheckinRequest(BaseModel):
 
 @router.post("/admin/checkin")
 async def run_checkin(req: CheckinRequest):
-    """Manually trigger check-ins for a project."""
+    """Manually trigger check-ins for a project. One message per owner."""
+    from app.core.checkins import queue_checkins
+
     now = _now()
-    from app.config import settings
-    from app.core.notifications import NotificationBatch
-
     async with repo.db_context() as db:
-        tasks = await repo.list_tasks(db, req.project_id)
-        participants = await repo.list_participants(db, req.project_id)
-        participant_map = {p["id"]: p for p in participants}
-
-        # Select chaseable tasks
-        chaseable = [
-            t for t in tasks
-            if t["status"] in ("in_progress", "blocked")
-            or (t["status"] == "pending" and t["readiness"] == "ready")
-        ]
-        if req.task_keys:
-            chaseable = [t for t in chaseable if t["key"] in req.task_keys]
-
-        # Group by owner
-        by_owner: dict[int, list] = {}
-        for t in chaseable:
-            if t.get("owner_id"):
-                by_owner.setdefault(t["owner_id"], []).append(t)
-
-        sent = 0
-        for owner_id, owner_tasks in by_owner.items():
-            p = participant_map.get(owner_id)
-            if not p or not p.get("telegram_chat_id"):
-                continue
-
-            batch = NotificationBatch()
-            if len(owner_tasks) == 1:
-                t = owner_tasks[0]
-                batch.add(
-                    participant_id=owner_id,
-                    template_key="FOLLOWUP_SINGLE",
-                    context={"task": t, "name": p["name"]},
-                    dedupe_key=f"followup:{t['id']}:{now[:10]}",
-                    question_kind="status_check",
-                    question_task_id=t["id"],
-                )
-            else:
-                batch.add(
-                    participant_id=owner_id,
-                    template_key="FOLLOWUP_MULTI",
-                    context={
-                        "name": p["name"],
-                        "numbered_task_list": "\n".join(
-                            f"{i+1}. {t['key']} · {t['title']}"
-                            for i, t in enumerate(owner_tasks)
-                        ),
-                    },
-                )
-            await batch.flush(db, now=now)
-            sent += len(owner_tasks)
-
+        project = await repo.get_project(db, req.project_id)
+        if not project:
+            raise HTTPException(404, "Project not found")
+        sent = await queue_checkins(db, req.project_id, now, task_keys=req.task_keys)
     return {"status": "queued", "tasks_targeted": sent}
 
 

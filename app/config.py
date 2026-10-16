@@ -6,7 +6,7 @@ All settings are available as `from app.config import settings`.
 """
 from __future__ import annotations
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # ---- Telegram ---------------------------------------------------
-    telegram_bot_token: str = Field(..., description="BotFather token — REQUIRED")
+    telegram_bot_token: str = ""
     telegram_bot_username: str = "cadence_coord_bot"
     telegram_group_chat_id: int | None = None
 
@@ -24,8 +24,8 @@ class Settings(BaseSettings):
 
     # ---- LLM: Ollama primary ----------------------------------------
     ollama_base_url: str = "http://localhost:11435"
-    coordinator_model: str = Field(..., description="Ollama model for coordinator — REQUIRED")
-    planner_model: str = Field(..., description="Ollama model for planner — REQUIRED")
+    coordinator_model: str = ""
+    planner_model: str = ""
     coordinator_num_ctx: int = 8192
     planner_num_ctx: int = 32768
     coordinator_think: bool = False

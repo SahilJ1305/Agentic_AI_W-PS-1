@@ -8,8 +8,8 @@ Inline-button callbacks: pq:<question_id>:<option_index>
 from __future__ import annotations
 
 import html
+import json
 import logging
-import secrets
 from datetime import datetime, timezone
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
@@ -24,8 +24,9 @@ from telegram.ext import (
 
 from app.config import settings
 from app.db import repo
-from app.telegram.keyboards import parse_callback, BUTTONS
-from app.telegram.router import handle_message
+from app.core.notifications import BUTTONS
+from app.telegram.keyboards import parse_callback
+from app.telegram.router import apply_explicit_status, handle_message
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +38,11 @@ _project_id: int = 1  # Tier 1: single project
 def set_sse_publish(fn) -> None:
     global _sse_publish
     _sse_publish = fn
+
+
+async def _publish(event: str, payload: dict) -> None:
+    if _sse_publish is not None:
+        await _sse_publish(event, payload)
 
 
 async def _now() -> str:
@@ -112,11 +118,10 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     await update.message.reply_text(welcome, parse_mode="HTML")
 
-    if _sse_publish:
-        await _sse_publish("message.out", {
-            "participant": participant["name"],
-            "template_key": "ONBOARD_WELCOME",
-        })
+    await _publish("message.out", {
+        "participant": participant["name"],
+        "template_key": "ONBOARD_WELCOME",
+    })
 
 
 # ── /mytasks ──────────────────────────────────────────────────────────────────
@@ -166,8 +171,11 @@ async def next_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # ── /status ───────────────────────────────────────────────────────────────────
 
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
     async with repo.db_context() as db:
-        tasks = await repo.list_tasks(db, _project_id)
+        participant = await repo.get_participant_by_chat_id(db, chat_id)
+        project_id = participant["project_id"] if participant else _project_id
+        tasks = await repo.list_tasks(db, project_id)
     by_status = {}
     for t in tasks:
         by_status.setdefault(t["status"], []).append(t)
@@ -182,7 +190,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # ── /done ─────────────────────────────────────────────────────────────────────
 
 async def done_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Explicit /done <key> — skips LLM, goes through Policy Engine."""
+    """Explicit /done <key> — skips the LLM and still goes through the Policy Engine."""
     chat_id = update.effective_chat.id
     args = context.args or []
 
@@ -191,60 +199,22 @@ async def done_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     key = args[0].upper()
-    now = await _now()
-
     async with repo.db_context() as db:
         participant = await repo.get_participant_by_chat_id(db, chat_id)
-        if not participant:
-            await update.message.reply_text("You're not in this project.")
-            return
-        task = await repo.get_task_by_key(db, _project_id, key)
-        if not task or task.get("owner_id") != participant["id"]:
-            await update.message.reply_text(f"Task {key} not found or not yours.")
-            return
+    if not participant:
+        await update.message.reply_text("You're not in this project.")
+        return
 
-        # Artificial interpretation for the Policy Engine
-        from app.agents.schemas import Interpretation, TaskUpdate
-        interp = Interpretation(
-            intent="status_update",
-            updates=[TaskUpdate(
-                task_key=key,
-                task_match_confidence=1.0,
-                status="complete",
-                status_confidence=1.0,
-                evidence=f"/done command by {participant['name']}",
-            )],
-        )
-
-        async def _noop_publish(event, payload):
-            if _sse_publish:
-                await _sse_publish(event, payload)
-
-        # Save message first
-        msg_id = await repo.save_message(
-            db,
-            project_id=_project_id,
-            participant_id=participant["id"],
-            direction="in",
-            text=f"/done {key}",
-            now=now,
-        )
-
-        from app.core.policy import apply as policy_apply
-        decision = await policy_apply(
-            interpretation=interp,
-            sender=participant,
-            project_id=_project_id,
-            source_message_id=msg_id,
-            db=db,
-            now=now,
-        )
-        from app.telegram.router import _execute_update
-        for upd in decision.approved:
-            await _execute_update(upd, _project_id, participant["id"], msg_id, db, now, _noop_publish)
-        await decision.notifications.flush(db, now=now)
-
-    await update.message.reply_text(f"<b>{key}</b> marked as Complete.", parse_mode="HTML")
+    reply = await apply_explicit_status(
+        participant_id=participant["id"],
+        project_id=participant["project_id"],
+        task_key=key,
+        status="complete",
+        text=f"/done {key}",
+        telegram_message_id=update.message.message_id,
+        sse_publish=_publish,
+    )
+    await update.message.reply_text(reply, parse_mode="HTML")
 
 
 # ── /undo ─────────────────────────────────────────────────────────────────────
@@ -336,7 +306,6 @@ async def blocked_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     key = args[0].upper()
     reason = " ".join(args[1:])
-    text_for_router = f"/blocked {key}: {reason}"
 
     async with repo.db_context() as db:
         participant = await repo.get_participant_by_chat_id(db, chat_id)
@@ -344,13 +313,17 @@ async def blocked_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text("You're not in this project.")
             return
 
-    await handle_message(
+    reply = await apply_explicit_status(
         participant_id=participant["id"],
-        project_id=_project_id,
-        text=text_for_router,
+        project_id=participant["project_id"],
+        task_key=key,
+        status="blocked",
+        text=f"/blocked {key}: {reason}",
         telegram_message_id=update.message.message_id,
-        sse_publish=_sse_publish or (lambda e, p: None),
+        sse_publish=_publish,
+        blocker_description=reason,
     )
+    await update.message.reply_text(reply, parse_mode="HTML")
 
 
 # ── Inline button callback ────────────────────────────────────────────────────
@@ -373,22 +346,42 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.edit_message_text("This button has already been answered.")
             return
 
-        template_key = open_pq.get("payload_json")
-        buttons = BUTTONS.get("", [])
+        try:
+            payload = json.loads(open_pq.get("payload_json") or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        template_key = payload.get("_template_key", "")
+        buttons = BUTTONS.get(template_key, ["Done", "In progress", "Blocked"])
         cb = parse_callback(data, buttons)
         if cb is None:
             return
-
         option_text = cb.option_text
+        task = await repo.get_task(db, open_pq["task_id"]) if open_pq.get("task_id") else None
 
-    # Route the button answer through the normal message handler
-    await handle_message(
-        participant_id=participant["id"],
-        project_id=_project_id,
-        text=option_text,
-        telegram_message_id=query.message.message_id,
-        sse_publish=_sse_publish or (lambda e, p: None),
-    )
+    status_from_button = {
+        "Done": "complete",
+        "In progress": "in_progress",
+        "Blocked": "blocked",
+        "Not started": "pending",
+    }
+    if task and option_text in status_from_button:
+        await apply_explicit_status(
+            participant_id=participant["id"],
+            project_id=participant["project_id"],
+            task_key=task["key"],
+            status=status_from_button[option_text],
+            text=option_text,
+            telegram_message_id=query.message.message_id,
+            sse_publish=_publish,
+        )
+    else:
+        await handle_message(
+            participant_id=participant["id"],
+            project_id=participant["project_id"],
+            text=option_text,
+            telegram_message_id=query.message.message_id,
+            sse_publish=_publish,
+        )
 
     await query.edit_message_reply_markup(reply_markup=None)
 
@@ -412,10 +405,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     await handle_message(
         participant_id=participant["id"],
-        project_id=_project_id,
+        project_id=participant["project_id"],
         text=text,
         telegram_message_id=update.message.message_id,
-        sse_publish=_sse_publish or (lambda e, p: None),
+        sse_publish=_publish,
     )
 
 

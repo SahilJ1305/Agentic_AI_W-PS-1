@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.api.sse import broadcaster
+from app.config import settings
 from app.db import repo
 from app.core.dependency_engine import recompute_all_readiness, compute_critical_path
 
@@ -26,6 +27,14 @@ def _now() -> str:
 async def list_tasks(pid: int, status: str | None = None, owner_id: int | None = None, readiness: str | None = None):
     async with repo.db_context() as db:
         tasks = await repo.list_tasks(db, pid, status=status, owner_id=owner_id, readiness=readiness)
+        names = {
+            person["id"]: person["name"]
+            for person in await repo.list_participants(db, pid)
+        }
+        for task in tasks:
+            task["owner_name"] = names.get(task.get("owner_id"))
+            blockers = await repo.list_open_blockers_for_task(db, task["id"])
+            task["blocker"] = blockers[0]["description"] if blockers else None
     return tasks
 
 
@@ -162,6 +171,20 @@ async def revert_event(tid: int, event_id: int):
 
     await broadcaster.publish("task.updated", {"task_key": task["key"], "reason": "reverted"})
     return {"status": "reverted"}
+
+
+@router.get("/participants/{participant_id}/invite")
+async def participant_invite(participant_id: int):
+    async with repo.db_context() as db:
+        person = await repo.get_participant(db, participant_id)
+    if not person:
+        raise HTTPException(404, "Participant not found")
+    code = person["invite_code"]
+    return {
+        "name": person["name"],
+        "invite_code": code,
+        "deep_link": f"https://t.me/{settings.telegram_bot_username}?start={code}",
+    }
 
 
 @router.get("/projects/{pid}/blockers")
