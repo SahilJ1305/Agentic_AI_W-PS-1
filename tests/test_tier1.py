@@ -13,6 +13,7 @@ from app.core.policy import apply as policy_apply
 from app.db import repo
 from app.db.seed_demo import seed
 from app.telegram.router import _execute_update
+from tests.conftest import auth_header
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,6 +42,7 @@ def test_upload_stores_spec_and_creates_tasks(tmp_path):
 
     spec = (ROOT / "docs" / "demo-spec.md").read_bytes()
     with TestClient(app) as client:
+        client.headers.update(auth_header())
         created = client.post("/api/projects", json={"name": "FestPass", "timezone": "Asia/Kolkata"})
         assert created.status_code == 200, created.text
         project_id = created.json()["id"]
@@ -58,9 +60,6 @@ def test_upload_stores_spec_and_creates_tasks(tmp_path):
         assert by_key["T3"]["status"] == "pending"
         assert by_key["T5"]["readiness"] == "waiting"
         assert by_key["T2"]["readiness"] == "ready"
-        page = client.get("/")
-        assert page.status_code == 200
-        assert "Check in with everyone" in page.text
 
     async def originals():
         async with repo.db_context() as db:

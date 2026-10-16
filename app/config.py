@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     telegram_bot_username: str = "cadence_coord_bot"
     telegram_group_chat_id: int | None = None
 
+    # ---- Login (shared with backend/) -------------------------------
+    secret_key: str = ""                      # SECRET_KEY: same value the backend signs JWTs with
+    frontend_url: str = "http://localhost:5173"
+
     # ---- Storage ----------------------------------------------------
     database_path: str = "./data/cadence.db"
     timezone: str = "Asia/Kolkata"

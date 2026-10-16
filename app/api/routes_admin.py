@@ -6,14 +6,16 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.api.auth import CurrentUser, current_user, visible_project
 from app.db import repo
 from app.llm import ollama as _ollama
 from app.llm import openai_compat as _opencode
 
-router = APIRouter(tags=["admin"])
+public_router = APIRouter(tags=["admin"])
+router = APIRouter(tags=["admin"], dependencies=[Depends(current_user)])
 log = logging.getLogger(__name__)
 
 
@@ -21,7 +23,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-@router.get("/health")
+@public_router.get("/health")
 async def health():
     """Check DB, Telegram polling, Ollama, and OpenCode."""
     from app.config import settings
@@ -71,15 +73,13 @@ class CheckinRequest(BaseModel):
 
 
 @router.post("/admin/checkin")
-async def run_checkin(req: CheckinRequest):
+async def run_checkin(req: CheckinRequest, user: CurrentUser = Depends(current_user)):
     """Manually trigger check-ins for a project. One message per owner."""
     from app.core.checkins import queue_checkins
 
     now = _now()
     async with repo.db_context() as db:
-        project = await repo.get_project(db, req.project_id)
-        if not project:
-            raise HTTPException(404, "Project not found")
+        await visible_project(db, req.project_id, user)
         sent = await queue_checkins(db, req.project_id, now, task_keys=req.task_keys)
     return {"status": "queued", "tasks_targeted": sent}
 
