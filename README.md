@@ -50,7 +50,7 @@ Everyone can run the whole project independently from a fresh clone. You need **
 ```bash
 git clone https://github.com/SahilJ1305/Cadence.git && cd Cadence
 python -m venv .venv                                   # Windows: .venv\Scriptsctivate
-.venv/bin/pip install -r requirements.txt              # Windows: .venv\Scripts\pip ...
+.venv/bin/pip install -r requirements.txt              # Windows: .venv\Scripts\pip install -r requirements.txt
 .venv/bin/python -m scripts.init_env                   # creates your .env with fresh secrets
 ```
 
