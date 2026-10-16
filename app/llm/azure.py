@@ -46,6 +46,10 @@ async def close_client() -> None:
 
 def _url(path: str) -> str:
     base = settings.azure_ai_endpoint.rstrip("/")
+    # Foundry's sample code often shows the full operation URL; keep only the API root.
+    for suffix in ("/responses", "/chat/completions"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
     url = f"{base}/{path.lstrip('/')}"
     if settings.azure_ai_api_version:
         url += f"?api-version={settings.azure_ai_api_version}"

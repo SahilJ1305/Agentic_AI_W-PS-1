@@ -70,6 +70,19 @@ def test_azure_provider_sends_deployment_and_key(tmp_path, monkeypatch):
     assert "Respond ONLY with a JSON object" in seen["body"]["messages"][0]["content"]
 
 
+def test_azure_endpoint_copied_with_operation_path(monkeypatch):
+    monkeypatch.setattr(settings, "azure_ai_api_version", "")
+    for pasted in (
+        "https://demo.services.ai.azure.com/openai/v1/responses",
+        "https://demo.services.ai.azure.com/openai/v1/chat/completions/",
+        "https://demo.services.ai.azure.com/openai/v1",
+    ):
+        monkeypatch.setattr(settings, "azure_ai_endpoint", pasted)
+        assert azure_client._url("chat/completions") == (
+            "https://demo.services.ai.azure.com/openai/v1/chat/completions"
+        )
+
+
 def test_azure_without_deployment_fails_cleanly(tmp_path, monkeypatch):
     settings.database_path = str(tmp_path / "azure-missing.db")
     monkeypatch.setattr(settings, "llm_provider", "azure")
