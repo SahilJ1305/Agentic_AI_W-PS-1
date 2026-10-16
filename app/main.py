@@ -25,6 +25,7 @@ from app.api.sse import broadcaster
 from app.config import settings
 from app.db import repo
 from app.scheduler.jobs import start_scheduler, stop_scheduler
+from app.telegram import log_filters
 from app.telegram.gateway import build_application, set_sse_publish
 
 log = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ async def lifespan(app: FastAPI):
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    log_filters.install()
     await repo.init_db()
     if not settings.secret_key:
         log.warning("SECRET_KEY is empty. Every board request will fail until it matches the backend's.")
