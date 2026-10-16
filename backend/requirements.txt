@@ -18,4 +18,3 @@ alembic
 supabase
 psycopg
 resend
-python-telegram-bot
