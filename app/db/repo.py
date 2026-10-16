@@ -19,15 +19,25 @@ from typing import Any
 
 import aiosqlite
 
-_DB_PATH: str = os.getenv("DATABASE_PATH", "./data/cadence.db")
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+
+
+def database_path() -> str:
+    """Resolve the SQLite file. Tests can point settings.database_path elsewhere."""
+    try:
+        from app.config import settings
+        if settings.database_path:
+            return settings.database_path
+    except Exception:
+        pass
+    return os.getenv("DATABASE_PATH", "./data/cadence.db")
 
 
 # ── Connection pool ────────────────────────────────────────────────────────────
 
 async def get_db() -> aiosqlite.Connection:
     """Open a WAL-mode connection.  Caller is responsible for closing."""
-    db = await aiosqlite.connect(_DB_PATH)
+    db = await aiosqlite.connect(database_path())
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")
@@ -50,7 +60,7 @@ async def db_context():
 
 async def init_db(db_path: str | None = None) -> None:
     """Create tables and indexes if they do not exist."""
-    path = db_path or _DB_PATH
+    path = db_path or database_path()
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(path) as db:
         await db.executescript(_SCHEMA_PATH.read_text())
@@ -74,6 +84,11 @@ async def create_project(db: aiosqlite.Connection, *, name: str, timezone: str =
         "INSERT INTO projects (name, timezone) VALUES (?, ?)", (name, timezone)
     )
     return cur.lastrowid
+
+
+async def list_projects(db: aiosqlite.Connection) -> list[dict]:
+    cur = await db.execute("SELECT * FROM projects ORDER BY id")
+    return _rows(await cur.fetchall())
 
 
 async def get_project(db: aiosqlite.Connection, project_id: int) -> dict | None:

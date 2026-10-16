@@ -68,48 +68,48 @@ async def call_llm(
 
     errors: list[str] = []
 
-    # ── Attempt 1: Ollama ──────────────────────────────────────────────────────
-    try:
-        text, usage = await _ollama.chat(
-            model=model_primary,
-            messages=messages,
-            response_schema=response_schema,
-            think=think,
-            num_ctx=num_ctx,
-            timeout=timeout,
-        )
-        result, parse_err = _try_parse(response_schema, text)
-        if result is not None:
+    if not model_primary:
+        errors.append("No Ollama model configured (COORDINATOR_MODEL / PLANNER_MODEL)")
+    else:
+        try:
+            text, usage = await _ollama.chat(
+                model=model_primary,
+                messages=messages,
+                response_schema=response_schema,
+                think=think,
+                num_ctx=num_ctx,
+                timeout=timeout,
+            )
+            result, parse_err = _try_parse(response_schema, text)
+            if result is not None:
+                await _log(db, agent=agent, provider="ollama", model=model_primary,
+                           messages=messages, text=text, parsed_ok=True,
+                           usage=usage, now=now)
+                return result
+
+            repair_messages = messages + [
+                {"role": "assistant", "content": text},
+                {"role": "user", "content": f"The JSON you returned could not be parsed: {parse_err}. Please return valid JSON only."},
+            ]
+            text2, usage2 = await _ollama.chat(
+                model=model_primary,
+                messages=repair_messages,
+                response_schema=response_schema,
+                think=False,
+                num_ctx=num_ctx,
+                timeout=timeout,
+            )
+            result2, parse_err2 = _try_parse(response_schema, text2)
             await _log(db, agent=agent, provider="ollama", model=model_primary,
-                       messages=messages, text=text, parsed_ok=True,
-                       usage=usage, now=now)
-            return result
-
-        # Repair retry: send the parse error back to Ollama
-        repair_messages = messages + [
-            {"role": "assistant", "content": text},
-            {"role": "user", "content": f"The JSON you returned could not be parsed: {parse_err}. Please return valid JSON only."},
-        ]
-        text2, usage2 = await _ollama.chat(
-            model=model_primary,
-            messages=repair_messages,
-            response_schema=response_schema,
-            think=False,
-            num_ctx=num_ctx,
-            timeout=timeout,
-        )
-        result2, parse_err2 = _try_parse(response_schema, text2)
-        await _log(db, agent=agent, provider="ollama", model=model_primary,
-                   messages=repair_messages, text=text2,
-                   parsed_ok=result2 is not None,
-                   error=parse_err2, usage=usage2, now=now)
-        if result2 is not None:
-            return result2
-        errors.append(f"Ollama parse error after repair: {parse_err2}")
-
-    except _ollama.OllamaError as e:
-        errors.append(f"Ollama: {e}")
-        log.warning("Ollama failed for agent=%s: %s", agent, e)
+                       messages=repair_messages, text=text2,
+                       parsed_ok=result2 is not None,
+                       error=parse_err2, usage=usage2, now=now)
+            if result2 is not None:
+                return result2
+            errors.append(f"Ollama parse error after repair: {parse_err2}")
+        except _ollama.OllamaError as e:
+            errors.append(f"Ollama: {e}")
+            log.warning("Ollama failed for agent=%s: %s", agent, e)
 
     # ── Attempt 2: OpenCode Console ────────────────────────────────────────────
     if not settings.opencode_api_key:
