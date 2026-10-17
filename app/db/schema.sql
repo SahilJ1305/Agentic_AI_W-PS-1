@@ -27,9 +27,10 @@ CREATE TABLE IF NOT EXISTS participants (
   role              TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('lead','member')),
   skills            TEXT,                          -- comma-separated
   telegram_chat_id  INTEGER UNIQUE,                -- set on /start
-  telegram_username TEXT,
+  telegram_username TEXT,                          -- if set, only this account can join
   github_username   TEXT,                          -- for the Git claim checker
   invite_code       TEXT NOT NULL UNIQUE,
+  joined_as         TEXT,                          -- Telegram name of the account that joined
   onboarded_at      TEXT,
   last_seen_at      TEXT,
   paused_until      TEXT                           -- /pause

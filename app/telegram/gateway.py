@@ -130,8 +130,33 @@ def personal(handler):
 
 # ── /start ────────────────────────────────────────────────────────────────────
 
+def _account_label(user) -> str:
+    """How a Telegram account is shown to the lead: 'Rohan Sharma (@rohan)'."""
+    if user is None:
+        return "An unknown account"
+    handle = f"@{user.username}" if user.username else "no username"
+    return f"{user.full_name or 'Someone'} ({handle})"
+
+
+async def _alert_lead(db, participant: dict, template_key: str, context: dict, dedupe_key: str, now: str) -> None:
+    from app.core.notifications import NotificationBatch
+
+    lead = await repo.get_lead(db, participant["project_id"])
+    if not lead or lead["id"] == participant["id"]:
+        return
+    batch = NotificationBatch()
+    batch.add(participant_id=lead["id"], template_key=template_key,
+              context={"name": participant["name"], **context}, dedupe_key=dedupe_key)
+    await batch.flush(db, now=now)
+
+
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /start <invite_code>."""
+    """
+    Handle /start <invite_code>, or a plain /start from someone whose Telegram username is on file.
+
+    If the lead saved a Telegram username for a person, only that account can use their link.
+    Otherwise the first account to open it joins, and the lead is told who it was.
+    """
     chat_id = update.effective_chat.id
     args = context.args or []
 
@@ -139,24 +164,35 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("Message me directly to join: open my profile and tap Start.")
         return
 
-    if not args:
-        await update.message.reply_text(
-            "Hi! I'm Cadence, the project coordinator. To join your project, use the invite link your lead shared.",
-            parse_mode="HTML",
-        )
-        return
-
-    invite_code = args[0]
+    user = update.effective_user
+    username = (user.username or "") if user else ""
+    account = _account_label(user)
     now = await _now()
 
     async with repo.db_context() as db:
-        participant = await repo.get_participant_by_invite(db, invite_code)
-        if not participant:
-            await update.message.reply_text(
-                "That invite code isn't valid. Ask your lead for a new link.",
-                parse_mode="HTML",
-            )
-            return
+        if args:
+            participant = await repo.get_participant_by_invite(db, args[0])
+            if not participant:
+                await update.message.reply_text(
+                    "That invite code isn't valid. Ask your lead for a new link.",
+                    parse_mode="HTML",
+                )
+                return
+        else:
+            current = await repo.get_participant_by_chat_id(db, chat_id)
+            if current:
+                await update.message.reply_text(
+                    f"You're already in as {current['name']}. Send /mytasks to see your tasks."
+                )
+                return
+            matches = await repo.find_unjoined_by_telegram_username(db, username) if username else []
+            if len(matches) != 1:
+                await update.message.reply_text(
+                    "Hi! I'm Cadence, the project coordinator. To join your project, use the invite link your lead shared.",
+                    parse_mode="HTML",
+                )
+                return
+            participant = matches[0]
 
         if participant.get("telegram_chat_id") and participant["telegram_chat_id"] != chat_id:
             await update.message.reply_text(
@@ -165,10 +201,23 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
             return
 
-        # Onboard
+        expected = (participant.get("telegram_username") or "").lstrip("@")
+        check = expected and not settings.demo_mode
+        if check and username.lower() != expected.lower():
+            await update.message.reply_text(
+                f"This invite is for the Telegram account @{expected}, so I can't use it here. "
+                "If that's you, set that username in Telegram settings and try again; "
+                "otherwise ask your lead for your own link."
+            )
+            await _alert_lead(db, participant, "INVITE_WRONG_ACCOUNT",
+                              {"account": account, "expected": expected},
+                              f"invite_wrong:{participant['id']}:{user.id if user else chat_id}", now)
+            return
+
+        first_join = not participant.get("telegram_chat_id")
         try:
             await repo.onboard_participant(
-                db, participant["id"], chat_id=chat_id, onboarded_at=now
+                db, participant["id"], chat_id=chat_id, onboarded_at=now, joined_as=account
             )
         except sqlite3.IntegrityError:
             current = await repo.get_participant_by_chat_id(db, chat_id)
@@ -177,6 +226,10 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "For now one account can join one project at a time.",
             )
             return
+
+        if first_join and not expected and not settings.demo_mode:
+            await _alert_lead(db, participant, "INVITE_UNVERIFIED", {"account": account},
+                              f"invite_unverified:{participant['id']}:{chat_id}", now)
 
         tasks = await repo.list_tasks_for_owner(db, participant["id"])
         project = await repo.get_project(db, participant["project_id"])

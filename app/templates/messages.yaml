@@ -5,6 +5,15 @@ ONBOARD_WELCOME:
     {task_list}
     Reply in plain words any time: "done", "stuck on X", "kal tak ho jayega".
 
+INVITE_WRONG_ACCOUNT:
+  text: "Heads up: {account} tried to join as <b>{name}</b>, but {name}'s Telegram username is set to @{expected}. I didn't let them in. If the username is wrong, fix it on the Team tab."
+
+INVITE_UNVERIFIED:
+  text: "{account} joined as <b>{name}</b>. I couldn't check it's really them because no Telegram username is saved for {name}. If it's the wrong person, press Unlink on the Team tab."
+
+INVITE_UNLINKED:
+  text: "Your lead disconnected this Telegram account from <b>{project}</b>, so I won't send you its updates any more."
+
 ONBOARD_TASK_ASSIGNED:
   text: "{lead} assigned you <b>{task_key} · {task_title}</b> (due {deadline_rel})."
 

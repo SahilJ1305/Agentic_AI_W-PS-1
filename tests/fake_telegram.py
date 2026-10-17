@@ -95,13 +95,17 @@ class Chat:
     _update_ids = itertools.count(1)
 
     def __init__(self, application, bot: FakeBot, chat_id: int, name: str, *,
-                 kind: str = "private", user_id: int | None = None) -> None:
+                 kind: str = "private", user_id: int | None = None, username: str | None = None) -> None:
         self.app, self.bot, self.id, self.name, self.kind = application, bot, chat_id, name, kind
         self.user_id = user_id if user_id is not None else chat_id
+        self.username = username
         self._message_ids = itertools.count(1)
 
     def _user(self) -> dict:
-        return {"id": self.user_id, "is_bot": False, "first_name": self.name}
+        user = {"id": self.user_id, "is_bot": False, "first_name": self.name}
+        if self.username:
+            user["username"] = self.username
+        return user
 
     def _chat(self) -> dict:
         return {"id": self.id, "type": self.kind, "first_name": self.name}

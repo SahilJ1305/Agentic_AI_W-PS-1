@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { Users, Copy, QrCode, Github, UserPlus, Check, PauseCircle, Send } from 'lucide-react';
+import { Users, Copy, QrCode, Github, UserPlus, Check, PauseCircle, Send, AtSign, Unlink } from 'lucide-react';
 import { cadence } from '../../api/cadence';
 import { toast } from '../../hooks/useToastStore';
 import { copyText, inputClass, secondaryButton, darkButton, timeAgo } from './helpers';
@@ -13,20 +13,20 @@ function telegramState(person) {
   return { label: 'On Telegram', tone: 'green' };
 }
 
-const GithubField = ({ pid, person, onChanged }) => {
-  const [value, setValue] = useState(person.github_username || '');
+const HandleField = ({ pid, person, field, label, icon: Icon, onChanged }) => {
+  const [value, setValue] = useState(person[field] || '');
   const [busy, setBusy] = useState(false);
-  const dirty = value.trim().replace(/^@/, '') !== (person.github_username || '');
+  const dirty = value.trim().replace(/^@/, '') !== (person[field] || '');
 
   const save = async (e) => {
     e.preventDefault();
     setBusy(true);
     try {
-      await cadence.updateParticipant(pid, person.id, { github_username: value.trim().replace(/^@/, '') || null });
+      await cadence.updateParticipant(pid, person.id, { [field]: value.trim().replace(/^@/, '') || null });
       toast.success(
-        person.telegram_chat_id && value.trim()
+        field === 'github_username' && person.telegram_chat_id && value.trim()
           ? `Saved. ${person.name} was told on Telegram and can tap Recheck to verify finished tasks.`
-          : `GitHub username saved for ${person.name}.`,
+          : `${label} saved for ${person.name}.`,
       );
       await onChanged();
     } catch (err) {
@@ -38,12 +38,12 @@ const GithubField = ({ pid, person, onChanged }) => {
 
   return (
     <form onSubmit={save} className="flex items-center gap-2">
-      <Github className="w-4 h-4 text-slate-400 shrink-0" />
+      <Icon className="w-4 h-4 text-slate-400 shrink-0" />
       <input
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        placeholder="GitHub username"
-        aria-label={`GitHub username for ${person.name}`}
+        placeholder={label}
+        aria-label={`${label} for ${person.name}`}
         className={`${inputClass} !py-1.5`}
       />
       <button type="submit" disabled={!dirty || busy} className={`${secondaryButton} !py-1.5 shrink-0`}>
@@ -98,6 +98,29 @@ const InviteBlock = ({ person }) => {
   );
 };
 
+const UnlinkButton = ({ pid, person, onChanged }) => {
+  const [busy, setBusy] = useState(false);
+  const unlink = async () => {
+    const who = person.joined_as || 'the Telegram account that joined';
+    if (!window.confirm(`Disconnect ${who} from ${person.name} and make a new invite link? The old link stops working.`)) return;
+    setBusy(true);
+    try {
+      await cadence.resetInvite(pid, person.id);
+      toast.success(`${person.name} was unlinked. Send them the new invite link.`);
+      await onChanged();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" onClick={unlink} disabled={busy} className={`${secondaryButton} !py-1 !px-2.5 text-xs`}>
+      <Unlink className="w-3.5 h-3.5" /> {busy ? 'Unlinking…' : 'Unlink & new link'}
+    </button>
+  );
+};
+
 const MemberCard = ({ pid, person, gitCheck, onChanged }) => {
   const state = telegramState(person);
   const missingGithub = Boolean(gitCheck?.enabled) && !person.github_username;
@@ -117,24 +140,44 @@ const MemberCard = ({ pid, person, gitCheck, onChanged }) => {
       <p className="text-xs text-slate-500 mt-1">
         {person.open_task_count ?? 0} open task{person.open_task_count === 1 ? '' : 's'}
         {person.task_count != null ? ` of ${person.task_count}` : ''}
-        {person.telegram_username ? ` · @${person.telegram_username}` : ''}
         {person.last_seen_at ? ` · seen ${timeAgo(person.last_seen_at)}` : ''}
       </p>
+      {joined && person.joined_as && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+          <span>Joined as <strong>{person.joined_as}</strong></span>
+          <UnlinkButton pid={pid} person={person} onChanged={onChanged} />
+        </div>
+      )}
       {skills.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {skills.map((skill) => <Chip key={skill}>{skill}</Chip>)}
         </div>
       )}
-      <div className="mt-3">
-        <GithubField key={person.github_username || ''} pid={pid} person={person} onChanged={onChanged} />
-        {missingGithub ? (
-          <p className="text-[11px] text-amber-700 mt-1">
-            Without this, {person.name}&apos;s “done” claims are accepted but stay <strong>unverified</strong>. Cadence never guesses a username.
+      <div className="mt-3 space-y-2">
+        <div>
+          <HandleField key={`tg-${person.telegram_username || ''}`} pid={pid} person={person} field="telegram_username"
+            label="Telegram username" icon={AtSign} onChanged={onChanged} />
+          <p className="text-[11px] text-slate-400 mt-1">
+            {person.telegram_username
+              ? `Only @${person.telegram_username} can use this invite, and they can also just open the bot and tap Start.`
+              : 'Without it, whoever opens the invite link first joins as this person.'}
           </p>
-        ) : (
-          <p className="text-[11px] text-slate-400 mt-1">Used to check “done” claims against this person&apos;s commits.</p>
-        )}
+        </div>
+        <div>
+          <HandleField key={`gh-${person.github_username || ''}`} pid={pid} person={person} field="github_username"
+            label="GitHub username" icon={Github} onChanged={onChanged} />
+          {missingGithub ? (
+            <p className="text-[11px] text-amber-700 mt-1">
+              Without this, {person.name}&apos;s “done” claims are accepted but stay <strong>unverified</strong>. Cadence never guesses a username.
+            </p>
+          ) : (
+            <p className="text-[11px] text-slate-400 mt-1">Used to check “done” claims against this person&apos;s commits.</p>
+          )}
+        </div>
       </div>
+      {joined && !person.joined_as && (
+        <div className="mt-2"><UnlinkButton pid={pid} person={person} onChanged={onChanged} /></div>
+      )}
       {!joined && <InviteBlock person={person} />}
       {joined && person.deep_link && (
         <details className="mt-3 text-xs text-slate-500">
@@ -183,7 +226,7 @@ const AddTeammate = ({ pid, onChanged }) => {
           <option value="lead">Lead</option>
         </select>
         <input value={form.skills} onChange={set('skills')} placeholder="Skills (comma separated)" className={`${inputClass} sm:col-span-2`} aria-label="Skills" />
-        <input value={form.telegram_username} onChange={set('telegram_username')} placeholder="Telegram username (optional)" className={inputClass} aria-label="Telegram username" />
+        <input value={form.telegram_username} onChange={set('telegram_username')} placeholder="Telegram username (recommended)" className={inputClass} aria-label="Telegram username" />
         <input value={form.github_username} onChange={set('github_username')} placeholder="GitHub username (optional)" className={inputClass} aria-label="GitHub username" />
         <button type="submit" disabled={busy || !form.name.trim()} className={`${darkButton} sm:col-span-2`}>
           {busy ? 'Adding…' : 'Add teammate'}
@@ -201,7 +244,8 @@ const Team = ({ pid, people, gitCheck, onChanged }) => {
       <Panel icon={Users} title={`Team (${people.length})`}>
         <p className="text-sm text-slate-500">
           Each teammate opens their personal invite link (or scans the QR code) and taps <strong>Start</strong> in Telegram.
-          That links their chat to their tasks, and Cadence can start checking in.
+          That links their chat to their tasks, and Cadence can start checking in. Save each person&apos;s Telegram username
+          so only they can use their link; then they can simply open the bot and tap Start, no link needed.
           {waiting > 0 ? ` ${waiting} still ${waiting === 1 ? 'has' : 'have'} not joined.` : people.length > 0 ? ' Everyone has joined.' : ''}
         </p>
       </Panel>

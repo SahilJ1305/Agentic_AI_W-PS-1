@@ -154,6 +154,8 @@ def render_template(template_key: str, context: dict) -> str:
         "{offer_part}":      _esc(context.get("offer_part", "")),
         "{routing_part}":    _esc(context.get("routing_part", "")),
         "{reporter}":        _esc(context.get("reporter", "")),
+        "{account}":         _esc(context.get("account", "")),
+        "{expected}":        _esc(context.get("expected", "")),
         "{claimed_status}":  _esc(context.get("claimed_status", "")),
         "{reason}":          _esc(context.get("reason", "")),
         "{minutes}":         _esc(context.get("minutes", "")),

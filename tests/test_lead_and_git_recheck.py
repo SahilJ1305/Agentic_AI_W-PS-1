@@ -43,7 +43,7 @@ async def import_shelfshare(w: World) -> int:
 async def join_everyone(w: World, pid: int) -> None:
     people = (await w.http.get(f"/api/projects/{pid}/participants")).json()
     for person in people:
-        chat = Chat(w.app, w.bot, PEOPLE[person["name"]], person["name"])
+        chat = Chat(w.app, w.bot, PEOPLE[person["name"]], person["name"], username=person["telegram_username"])
         w.chat[person["name"]] = chat
         await chat.say(f"/start {person['invite_code']}")
     await w.deliver()
