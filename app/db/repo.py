@@ -135,6 +135,20 @@ async def get_project_by_group(db: aiosqlite.Connection, group_chat_id: int) -> 
     return _row(await cur.fetchone())
 
 
+async def get_project_settings(db: aiosqlite.Connection, project_id: int) -> dict:
+    cur = await db.execute("SELECT settings_json FROM projects WHERE id = ?", (project_id,))
+    row = await cur.fetchone()
+    try:
+        return json.loads(row["settings_json"] or "{}") if row else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+async def update_project_settings(db: aiosqlite.Connection, project_id: int, **changes) -> None:
+    merged = {**await get_project_settings(db, project_id), **changes}
+    await db.execute("UPDATE projects SET settings_json = ? WHERE id = ?", (json.dumps(merged), project_id))
+
+
 async def set_project_group(db: aiosqlite.Connection, project_id: int, group_chat_id: int | None) -> None:
     await db.execute("UPDATE projects SET group_chat_id = ? WHERE id = ?", (group_chat_id, project_id))
 

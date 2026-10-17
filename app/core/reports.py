@@ -134,6 +134,89 @@ def render_digest(view: ProjectView, since: datetime, now: datetime) -> tuple[st
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Lead summary (/update_now, /update_every)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def every_label(hours: float) -> str:
+    return f"{round(hours * 60)} min" if hours < 1 else f"{hours:g} h"
+
+
+def summary_fingerprint(view: ProjectView) -> str:
+    tasks = "|".join(f"{t['key']}:{t['status']}:{t.get('blocker') or ''}" for t in sorted(view.tasks, key=lambda t: t["key"]))
+    risks = "|".join(sorted(f"{r.task_key}:{r.level}" for r in view.risks))
+    return f"{tasks}#{risks}"
+
+
+def render_lead_summary(view: ProjectView, since: datetime | None, now: datetime, every_h: float) -> str:
+    """Short Telegram summary for the lead: progress bar, counts, then only what needs attention."""
+    esc = html.escape
+    tasks = view.tasks
+    total = len(tasks) or 1
+    count = {s: sum(t["status"] == s for t in tasks) for s in STATUS_LABEL}
+    filled = round(10 * count["complete"] / total)
+    out = [
+        f"📊 <b>{esc(view.project.get('name') or 'Project')}</b> · {_local(now).strftime('%H:%M')}",
+        f"{'▰' * filled}{'▱' * (10 - filled)}  <b>{count['complete']}/{len(tasks)}</b> done",
+        f"🔄 {count['in_progress']} in progress · 🚫 {count['blocked']} blocked · ⏳ {count['pending']} to do",
+    ]
+
+    def section(title: str, items: list[str]) -> None:
+        if items:
+            out.extend(["", title, *items[:3]])
+            if len(items) > 3:
+                out.append(f"   +{len(items) - 3} more")
+
+    def who(t: dict) -> str:
+        return f" · {esc(t['owner_name'])}" if t.get("owner_name") else ""
+
+    blocked = [t for t in tasks if t["status"] == "blocked"]
+    section("🚫 <b>Blocked</b>", [
+        f"• <b>{esc(t['key'])}</b> {esc(_clip(t['title'], 40))}{who(t)}\n   <i>{esc(_clip(t.get('blocker') or 'no reason given', 60))}</i>"
+        for t in blocked
+    ])
+    blocked_keys = {t["key"] for t in blocked}
+    section("⚠️ <b>At risk</b>", [
+        f"• <b>{esc(r.task_key)}</b> {esc(_clip(r.task_title, 40))}{' · ' + esc(r.owner_name) if r.owner_name else ''}"
+        f"\n   <i>{esc(_clip(r.why, 60))}</i>"
+        for r in view.risks if r.task_key not in blocked_keys
+    ])
+    cutoff = since or now - timedelta(hours=24)
+    done = [t for t in tasks if t["status"] == "complete" and (parse_ts(t.get("completed_at")) or cutoff) > cutoff]
+    when = f"since {_local(since).strftime('%H:%M')}" if since else "in the last 24 h"
+    section(f"✅ <b>Done {when}</b>", [
+        f"• <b>{esc(t['key'])}</b> {esc(_clip(t['title'], 40))}{who(t)}" for t in done
+    ])
+    upcoming = sorted(
+        (pair for pair in ((parse_ts(t.get("deadline")), t) for t in tasks if t["status"] != "complete") if pair[0]),
+        key=lambda pair: pair[0],
+    )
+    if upcoming:
+        when, t = upcoming[0]
+        out += ["", f"⏰ <b>Next deadline:</b> {esc(t['key'])} {esc(_clip(t['title'], 40))} · {human_rel(when, now)}"]
+    if not blocked and not view.risks:
+        out += ["", "✨ Nothing blocked or at risk."]
+    footer = f"Every {every_label(every_h)} · /update_now · /update_every off" if every_h else "/update_every 2h for regular updates"
+    out += ["", f"<i>{footer}</i>"]
+    return "\n".join(out)
+
+
+async def lead_summary(db: aiosqlite.Connection, project_id: int, now: datetime, *, force: bool = False) -> str | None:
+    """The lead's summary, or None when nothing changed since the last one (unless forced)."""
+    saved = await repo.get_project_settings(db, project_id)
+    view = await load_view(db, project_id, now)
+    fingerprint = summary_fingerprint(view)
+    stamp = now.isoformat()
+    if not force and fingerprint == saved.get("lead_summary_fp"):
+        await repo.update_project_settings(db, project_id, lead_summary_at=stamp)
+        return None
+    since = parse_ts(saved.get("lead_summary_sent_at"))
+    every = float(saved.get("lead_summary_every_h", settings.lead_summary_every_h) or 0)
+    await repo.update_project_settings(db, project_id, lead_summary_at=stamp, lead_summary_sent_at=stamp,
+                                       lead_summary_fp=fingerprint)
+    return render_lead_summary(view, since, now, every)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Risk report
 # ═══════════════════════════════════════════════════════════════════════════
 

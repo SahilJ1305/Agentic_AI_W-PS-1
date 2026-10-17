@@ -59,6 +59,8 @@ BOT_COMMANDS = [
     ("pause", "Pause reminders: /pause 3 (hours)"),
     ("digest", "Post the project digest"),
     ("risk", "Post the risk report"),
+    ("update_now", "Lead: team summary right now"),
+    ("update_every", "Lead: how often to get summaries, e.g. 2h, 0.5h, off"),
     ("help", "What I understand"),
 ]
 
@@ -237,6 +239,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         project = await repo.get_project(db, participant["project_id"])
         project_name = project["name"] if project else "your project"
         lead_row = await repo.get_lead(db, participant["project_id"])
+        lead_settings = await repo.get_project_settings(db, participant["project_id"])
 
     # Build task list
     task_lines = []
@@ -258,6 +261,16 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"Reply in plain words any time: \"done\", \"stuck on X\", \"kal tak ho jayega\".\n"
         f"Type /help to see all commands."
     )
+    if participant.get("role") == "lead":
+        from app.core.reports import every_label
+
+        every = float(lead_settings.get("lead_summary_every_h", settings.lead_summary_every_h) or 0)
+        cadence = f"send a short team summary every {every_label(every)}" if every else "send a team summary when you ask"
+        welcome += (
+            "\n\n👑 <b>You're the lead.</b> I'll message you whenever someone changes a task, with an Unblock "
+            f"button on blockers, and {cadence}.\n"
+            "/update_now · /update_every 0.5h · /update_every off · or say <i>unblock &lt;name&gt;</i>"
+        )
     if settings.git_check_enabled and not participant.get("github_username"):
         who = (
             "you can add it on the Cadence website (Team tab)"
@@ -421,6 +434,8 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/pause 3 — no reminders for 3 hours (/pause 0 to resume)\n"
         "/digest, /risk — post a project report (lead, or in the team group)\n"
         "/linkgroup — lead only: send in the team group to receive the daily digest there\n"
+        "/update_now — lead only: team summary right now\n"
+        "/update_every 2h — lead only: how often you get it (0.5h, 0.2h, off)\n"
         "\n<b>Talk to your team through me:</b>\n"
         "tell the lead the API key is missing\n"
         "@Rohan can you share the keys?\n"
@@ -463,6 +478,37 @@ async def blocked_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(reply, parse_mode="HTML")
 
 
+async def _unblock_button(query, participant: dict, data: str, db, now: str) -> None:
+    """The lead taps "Unblock <name>" under a blocked-task alert."""
+    from types import SimpleNamespace
+
+    from app.telegram.router import _execute_resolution
+
+    if participant.get("role") != "lead":
+        await query.message.reply_text("Only the lead can clear a blocker.")
+        return
+    try:
+        task = await repo.get_task(db, int(data.split(":")[1]))
+    except (IndexError, ValueError):
+        task = None
+    await _clear_buttons(query)
+    if not task or task["project_id"] != participant["project_id"]:
+        return
+    if not await repo.list_open_blockers_for_task(db, task["id"]):
+        await query.message.reply_text(f"{task['key']} has no open blocker any more.")
+        return
+    await _execute_resolution(SimpleNamespace(task_id=task["id"], note=""), task["project_id"],
+                              participant, None, db, now, _publish)
+    owner = await repo.get_participant(db, task["owner_id"]) if task.get("owner_id") else None
+    if not owner or owner["id"] == participant["id"]:
+        told = ""
+    elif owner.get("telegram_chat_id"):
+        told = f" I told {owner['name']} to carry on."
+    else:
+        told = f" {owner['name']} isn't on Telegram yet, so tell them yourself."
+    await query.message.reply_text(f"✅ Cleared the blocker on {task['key']}.{told}")
+
+
 # ── Inline button callback ────────────────────────────────────────────────────
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -482,6 +528,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await recheck_member(
                 participant_id=participant["id"], project_id=participant["project_id"], sse_publish=_publish,
             )
+            return
+        if data.startswith("unblock:"):
+            await _unblock_button(query, participant, data, db, now)
             return
         question = None
         try:
@@ -855,6 +904,83 @@ async def risk_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _send_report(update, "risk")
 
 
+# ── /update_every, /update_now (lead only) ────────────────────────────────────
+
+def parse_every(text: str) -> float | None:
+    """'2h', '0.5h', '0.2', '30m', '90 min', 'off' → hours (0 = off). None if unreadable or out of range."""
+    import re
+
+    text = text.strip().lower().replace(",", ".")
+    if text in ("off", "stop", "none", "no", "disable"):
+        return 0.0
+    m = re.fullmatch(r"(\d+(?:\.\d+)?|\.\d+)\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes)?", text)
+    if not m:
+        return None
+    hours = float(m.group(1)) / (60 if (m.group(2) or "h").startswith("m") else 1)
+    if hours == 0:
+        return 0.0
+    return round(hours, 4) if 0.05 <= hours <= 24 else None
+
+
+async def _lead_or_explain(update: Update) -> dict | None:
+    async with repo.db_context() as db:
+        sender = await repo.get_participant_by_chat_id(db, update.effective_chat.id)
+    if not sender:
+        await update.message.reply_text("You're not in a project yet. Use your invite link first.")
+        return None
+    if sender.get("role") != "lead":
+        await update.message.reply_text("Team summaries go to the lead. /mytasks shows your own tasks.")
+        return None
+    return sender
+
+
+@personal
+async def update_every_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from app.core.reports import every_label
+
+    lead = await _lead_or_explain(update)
+    if not lead:
+        return
+    arg = " ".join(context.args or [])
+    async with repo.db_context() as db:
+        saved = await repo.get_project_settings(db, lead["project_id"])
+        current = float(saved.get("lead_summary_every_h", settings.lead_summary_every_h) or 0)
+        if not arg:
+            state = f"every <b>{every_label(current)}</b>" if current else "<b>off</b>"
+            await update.message.reply_text(
+                f"Team summaries: {state}.\nChange it: /update_every 2h · /update_every 0.5h · /update_every off",
+                parse_mode="HTML",
+            )
+            return
+        hours = parse_every(arg)
+        if hours is None:
+            await update.message.reply_text("Try /update_every 2h, /update_every 0.5h, /update_every 0.2h or /update_every off.")
+            return
+        # The next scheduled summary is due one full interval from now, not from the previous one.
+        await repo.update_project_settings(db, lead["project_id"], lead_summary_every_h=hours,
+                                           lead_summary_at=datetime.now(timezone.utc).isoformat())
+    if hours:
+        reply = (f"✅ I'll send you a team summary every <b>{every_label(hours)}</b>, only when something changed.\n"
+                 "You also get a one-line alert whenever someone changes a task.\n"
+                 "/update_now for one right away · /update_every off to stop")
+    else:
+        reply = ("🔕 Regular summaries are off. You'll still get a one-line alert when someone changes a task.\n"
+                 "/update_every 2h turns them back on.")
+    await update.message.reply_text(reply, parse_mode="HTML")
+
+
+@personal
+async def update_now_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from app.core.reports import lead_summary
+
+    lead = await _lead_or_explain(update)
+    if not lead:
+        return
+    async with repo.db_context() as db:
+        text = await lead_summary(db, lead["project_id"], datetime.now(timezone.utc), force=True)
+    await update.message.reply_text(text[:4000], parse_mode="HTML")
+
+
 async def linkgroup_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Lead sends this inside the team group so digests are posted there."""
     chat = update.effective_chat
@@ -922,6 +1048,8 @@ def build_application(project_id: int = 1, bot=None) -> Application:
     app.add_handler(CommandHandler("digest", digest_handler))
     app.add_handler(CommandHandler("risk", risk_handler))
     app.add_handler(CommandHandler("linkgroup", linkgroup_handler))
+    app.add_handler(CommandHandler("update_every", update_every_handler))
+    app.add_handler(CommandHandler("update_now", update_now_handler))
     app.add_handler(ChatMemberHandler(added_to_group_handler, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))

@@ -188,7 +188,7 @@ def parse_resolution(text: str, participants: list[dict], sender: dict) -> Inter
     if sender.get("role") != "lead":
         return None
     text = (text or "").strip()
-    if not text or text.startswith("/"):
+    if not text or text.startswith("/") or text.endswith("?"):      # "Zoya's issue sorted?" is a question
         return None
     people = _people(participants)
     for pattern in (_RESOLVE_FIRST, _RESOLVE_AFTER):
@@ -202,7 +202,7 @@ def parse_resolution(text: str, participants: list[dict], sender: dict) -> Inter
                 intent="message_relay", raw_message=text,
                 messages=[RelayOut(to="", text=note, task_key=who.upper(), resolves_blocker=True)],
             )
-        explicit = re.search(r"unblock|blocker|blocked", text, re.IGNORECASE)
+        explicit = re.search(r"unblock|blocker|blocked|issue|problem|resolved|cleared|sorted", text, re.IGNORECASE)
         if explicit and _is_known(who, people) and who.lower() not in _EVERYONE_WORDS:
             return Interpretation(
                 intent="message_relay", raw_message=text,

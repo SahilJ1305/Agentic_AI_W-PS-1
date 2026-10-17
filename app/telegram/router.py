@@ -392,6 +392,7 @@ async def _revert_latest(db, sender: dict, *, now: str, reason: str, sse_publish
     await recompute_readiness_quietly(db, last_task["project_id"], now)
     if last_event["new_value"] == "complete" and restored != "complete":
         await _notify_reopened(db, last_task, reason, now)
+    await alert_leads(db, last_task, sender["id"], last_event["new_value"], restored, " (undone)", now, icon="↩️")
     await sse_publish("task.updated", {
         "task_key": last_task["key"],
         "status": restored,
@@ -622,6 +623,60 @@ async def _acknowledge(upd, task: dict, db, now: str, msg_id: int | None) -> Non
     await batch.flush(db, now=now, source_msg_id=msg_id)
 
 
+_STATUS_ICON = {"complete": "✅", "in_progress": "🔄", "blocked": "🚫", "pending": "⏳"}
+_STATUS_WORD = {"pending": "To do", "in_progress": "In progress", "blocked": "Blocked", "complete": "Done"}
+
+
+async def _tell_lead(upd, task: dict, sender_id: int, db, now: str, msg_id: int | None) -> None:
+    """One line to the lead whenever a teammate's task changes status; blocked ones get an Unblock button."""
+    if not upd.new_status or upd.new_status == upd.old_status:
+        return
+    helper_id = upd.blocker_linked_participant_id
+    if upd.blocker_linked_task_id and not helper_id:
+        linked = await repo.get_task(db, upd.blocker_linked_task_id)
+        helper_id = (linked or {}).get("owner_id")
+    if upd.new_status == "blocked":
+        detail = f": {upd.blocker_description}" if upd.blocker_description else ""
+    elif upd.new_status == "complete" and "needs_verification" in json.loads(task.get("flags_json") or "[]"):
+        detail = " (unverified)"
+    else:
+        detail = f", ETA {upd.eta}" if upd.eta else ""
+    await alert_leads(db, task, sender_id, upd.old_status, upd.new_status, detail, now, msg_id,
+                      already_asked=helper_id)
+
+
+async def alert_leads(db, task: dict, sender_id: int, old: str | None, new: str, detail: str, now: str,
+                      msg_id: int | None = None, *, icon: str | None = None, already_asked: int | None = None) -> None:
+    """Send LEAD_TASK_CHANGE to every lead except the one who made the change (or was already asked to help)."""
+    leads = [p for p in await repo.list_participants(db, task["project_id"])
+             if p.get("role") == "lead" and p["id"] not in (sender_id, already_asked)]
+    if not leads:
+        return
+    sender = await repo.get_participant(db, sender_id) or {}
+    owner = await repo.get_participant(db, task["owner_id"]) if task.get("owner_id") else None
+    who = sender.get("name", "Someone")
+    if owner and owner["id"] != sender_id:
+        who += f" (on {owner['name']}'s task)"
+    if len(detail) > 120:
+        detail = detail[:119] + "…"
+    blocked = new == "blocked"
+    batch = NotificationBatch()
+    for lead in leads:
+        batch.add(
+            participant_id=lead["id"],
+            template_key="LEAD_TASK_CHANGE",
+            context={
+                "task": task, "name": who, "icon": icon or _STATUS_ICON.get(new, "•"),
+                "old_status": _STATUS_WORD.get(old, old or "—"),
+                "status": _STATUS_WORD.get(new, new), "detail_part": detail,
+            },
+            static_buttons=[(f"✅ Unblock {(owner or sender).get('name', '')}".strip(), f"unblock:{task['id']}")]
+            if blocked else None,
+            dedupe_key=f"leadchg:{task['id']}:{new}:{now}",
+        )
+    await batch.flush(db, now=now, source_msg_id=msg_id)
+
+
 async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_publish):
     """Write an approved update to the DB and trigger propagation."""
     task = await repo.get_task(db, upd.task_id)
@@ -803,6 +858,7 @@ async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_
 
     fresh = await repo.get_task(db, upd.task_id)
     await _acknowledge(upd, fresh or task, db, now, msg_id)
+    await _tell_lead(upd, fresh or task, participant_id, db, now, msg_id)
     await db.commit()
     await sse_publish("task.updated", {
         "task_key": upd.task_key,
