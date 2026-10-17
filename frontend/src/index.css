@@ -36,3 +36,8 @@ body { -webkit-font-smoothing: antialiased; }
 @media (prefers-reduced-motion: reduce) {
   .cadence-enter { animation: none; }
 }
+
+/* The Plan screen has a commit bar pinned to the bottom. Keep anything scrolled into view (Tab key, links) clear of it. */
+html:has(.plan-commit-bar) {
+  scroll-padding-bottom: 7rem;
+}
