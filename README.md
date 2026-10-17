@@ -120,6 +120,7 @@ token, never paste logs that contain it, and `/revoke` it in BotFather if it lea
 | Buttons | answer any question the bot asks; they never go through the LLM |
 | `/mytasks` `/next` `/status` | see your tasks, your next ready task, the overview |
 | `/done T3` `/blocked T3 why` `/undo` | explicit updates, still checked by the Policy Engine |
+| `/recheck` | check your finished tasks against your GitHub commits again (also a button) |
 | `/pause 3` | no reminders for 3 hours (`/pause 0` resumes) |
 | `/digest` `/risk` | post a report (the lead anywhere, anyone in the linked team group) |
 | `/linkgroup` | the lead sends this in the team group |
@@ -138,7 +139,13 @@ When someone says a task is done, Cadence looks for a commit or pull request **b
 account** that matches the task. Set `GITHUB_REPO` (and a read-only `GITHUB_TOKEN`) in `.env` and give
 each teammate a GitHub username on the Team tab. A match marks the task *verified* and keeps the commit
 as evidence. Someone else's commit, or no commit, leaves it *complete (unverified)*, asks for a link,
-and tells the lead. Try it: `python -m scripts.check_git_claim <user> T3 "task title" "what they said"`.
+and tells the lead. **Cadence never guesses a GitHub username.** If someone has none on the Team tab, the bot says so when they
+join and again when they say "done". The task is still taken as complete, but marked *unverified*, the lead is
+told once, and nothing is sent to GitHub. When the lead saves the username, that person gets a message with a
+**Recheck my tasks** button (or they can send `/recheck`), which runs the checker over everything they already
+finished. Only a logged-in user can set a username.
+
+Try it: `python -m scripts.check_git_claim <user> T3 "task title" "what they said"`.
 
 ## How it maps to the spec
 

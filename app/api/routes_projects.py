@@ -76,6 +76,7 @@ async def get_project(pid: int, user: CurrentUser = Depends(current_user)):
         "critical_path": view.critical_path,
         "risks": [r.as_dict() for r in view.risks],
         "progress": {"complete": by_status.get("complete", 0), "total": len(view.tasks)},
+        "git_check": {"enabled": settings.git_check_enabled, "repo": settings.github_repo or None},
     }
 
 
@@ -419,16 +420,36 @@ async def add_participant(
 
 
 @router.patch("/{pid}/participants/{participant_id}")
-async def update_participant(pid: int, participant_id: int, req: UpdateParticipantRequest):
-    """Link a participant to their GitHub account for the Git claim checker."""
+async def update_participant(
+    pid: int,
+    participant_id: int,
+    req: UpdateParticipantRequest,
+    user: CurrentUser = Depends(current_user),
+):
+    """Link a participant to their GitHub account for the Git claim checker (project owner only)."""
+    username = (req.github_username or "").strip().lstrip("@") or None
     async with repo.db_context() as db:
+        await visible_project(db, pid, user)
         participant = await repo.get_participant(db, participant_id)
         if not participant or participant["project_id"] != pid:
             raise HTTPException(404, "Participant not found")
-        await repo.set_participant_github(
-            db, participant_id, (req.github_username or "").strip().lstrip("@") or None
-        )
+        changed = username != participant.get("github_username")
+        await repo.set_participant_github(db, participant_id, username)
         participant = await repo.get_participant(db, participant_id)
+        if changed and username and participant.get("telegram_chat_id"):
+            # Let them know, with a button to recheck what they already finished.
+            from app.core.notifications import NotificationBatch
+
+            batch = NotificationBatch()
+            batch.add(
+                participant_id=participant_id,
+                template_key="GIT_LINKED",
+                context={"github": username},
+                static_buttons=[("Recheck my tasks", "git:recheck")],
+            )
+            await batch.flush(db, now=_now())
+    if changed:
+        await broadcaster.publish("team.changed", {"project_id": pid, "participant": participant["name"]})
     return _with_invite(participant)
 
 

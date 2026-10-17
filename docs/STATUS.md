@@ -27,7 +27,8 @@ reading of real messages. Update this file as things change.
 by *their* GitHub account that matches the task (explicit link or search since the task was created).
 Verified work is marked verified with the commit as evidence; someone else's commit, or none, leaves the task
 "complete (unverified)", asks for a link and tells the lead. Needs `GITHUB_REPO` and each person's GitHub
-username. Commit authorship can be faked with a git email setting, so treat it as a strong hint, not proof.
+username. With no username on file the bot flags it (on joining and on "done"), takes the task as complete but
+unverified, tells the lead once, and never guesses; once the username is added the person can `/recheck`. Commit authorship can be faked with a git email setting, so treat it as a strong hint, not proof.
 
 Also built: dashboard (board, drawer, graph, activity feed with the rule behind each change, plan review,
 reports, team), Telegram commands, `scripts/setup_bot.py`, Docker deployment, CI, privacy rules (personal

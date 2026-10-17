@@ -34,7 +34,7 @@ from app.config import settings
 from app.db import repo
 from app.core.notifications import buttons_for
 from app.telegram.keyboards import parse_callback
-from app.telegram.router import _revert_latest, apply_explicit_status, handle_message
+from app.telegram.router import _revert_latest, apply_explicit_status, handle_message, recheck_member
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +54,7 @@ BOT_COMMANDS = [
     ("done", "Mark a task done: /done T3"),
     ("blocked", "Report a blocker: /blocked T3 reason"),
     ("undo", "Undo your last update"),
+    ("recheck", "Recheck your finished tasks against GitHub"),
     ("pause", "Pause reminders: /pause 3 (hours)"),
     ("digest", "Post the project digest"),
     ("risk", "Post the risk report"),
@@ -180,6 +181,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         tasks = await repo.list_tasks_for_owner(db, participant["id"])
         project = await repo.get_project(db, participant["project_id"])
         project_name = project["name"] if project else "your project"
+        lead_row = await repo.get_lead(db, participant["project_id"])
 
     # Build task list
     task_lines = []
@@ -201,6 +203,17 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"Reply in plain words any time: \"done\", \"stuck on X\", \"kal tak ho jayega\".\n"
         f"Type /help to see all commands."
     )
+    if settings.git_check_enabled and not participant.get("github_username"):
+        who = (
+            "you can add it on the Cadence website (Team tab)"
+            if participant.get("role") == "lead" or (lead_row and lead_row["id"] == participant["id"])
+            else f"ask {_escape((lead_row or {}).get('name', 'your lead'))} to add it on the Cadence website (Team tab)"
+        )
+        welcome += (
+            "\n\n⚠️ I don't have your <b>GitHub username</b> yet, and I won't guess it. Until it is set I can't "
+            f"check your \"done\" claims against your commits, so tasks you finish are marked unverified. "
+            f"{who[0].upper() + who[1:]}; I'll message you when it's added."
+        )
 
     await update.message.reply_text(welcome, parse_mode="HTML")
 
@@ -349,6 +362,7 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/done T3 — mark a task complete\n"
         "/blocked T3 reason — report a blocker\n"
         "/undo — revert your last update\n"
+        "/recheck — check your finished tasks against your GitHub commits again\n"
         "/pause 3 — no reminders for 3 hours (/pause 0 to resume)\n"
         "/digest, /risk — post a project report (lead, or in the team group)\n"
         "/linkgroup — lead only: send in the team group to receive the daily digest there\n"
@@ -403,6 +417,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         participant = await repo.get_participant_by_chat_id(db, chat_id)
         if not participant:
             await query.message.reply_text("I don't recognise you. Use the invite link your project lead shared.")
+            return
+        if data == "git:recheck":
+            await recheck_member(
+                participant_id=participant["id"], project_id=participant["project_id"], sse_publish=_publish,
+            )
             return
         question = None
         try:
@@ -578,7 +597,7 @@ async def _tell_blocked_owner(blocked, upstream, blocker, helper, template_key, 
         if lead_too:
             lead = await repo.get_lead(db, blocked["project_id"])
             owner = await repo.get_participant(db, blocked["owner_id"]) if blocked.get("owner_id") else None
-            if lead:
+            if lead and lead["id"] != blocked.get("owner_id"):
                 batch.add(
                     participant_id=lead["id"],
                     template_key="BLOCKER_ESCALATED",
@@ -622,6 +641,19 @@ async def _typing(bot, chat_id: int) -> None:
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
     except Exception:
         pass     # purely cosmetic
+
+
+# ── /recheck ──────────────────────────────────────────────────────────────────
+
+@personal
+async def recheck_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run the Git claim checker again for your finished, unverified tasks."""
+    async with repo.db_context() as db:
+        participant = await repo.get_participant_by_chat_id(db, update.effective_chat.id)
+    if not participant:
+        await update.message.reply_text("You're not in this project.")
+        return
+    await recheck_member(participant_id=participant["id"], project_id=participant["project_id"], sse_publish=_publish)
 
 
 # ── /pause ────────────────────────────────────────────────────────────────────
@@ -759,6 +791,7 @@ def build_application(project_id: int = 1, bot=None) -> Application:
     app.add_handler(CommandHandler("blocked", blocked_handler))
     app.add_handler(CommandHandler("undo", undo_handler))
     app.add_handler(CommandHandler("help", help_handler))
+    app.add_handler(CommandHandler("recheck", recheck_handler))
     app.add_handler(CommandHandler("pause", pause_handler))
     app.add_handler(CommandHandler("digest", digest_handler))
     app.add_handler(CommandHandler("risk", risk_handler))

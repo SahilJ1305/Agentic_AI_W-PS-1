@@ -212,6 +212,7 @@ async def _process_burst(
                     recent_messages=recent,
                     message_text=burst_text,
                     db=db,
+                    sender_role=sender["role"],
                 )
         except LLMFailure as e:
             log.error("LLM failure for participant=%d: %s", participant_id, e)
@@ -454,6 +455,79 @@ async def apply_explicit_status(
     return f"No change recorded for {task_key}."
 
 
+async def recheck_member(*, participant_id: int, project_id: int, sse_publish) -> str:
+    """
+    Run the Git claim checker again for a member's finished tasks that are still unverified, and
+    tell them the result. Used by /recheck and the "Recheck my tasks" button, typically after the
+    lead has added their GitHub username on the website. Returns the message that was queued.
+    """
+    from app.agents.schemas import Interpretation, TaskUpdate
+
+    sse_publish = _tagged(sse_publish, project_id)
+    now = datetime.now(timezone.utc).isoformat()
+    async with repo.db_context() as db:
+        sender = await repo.get_participant(db, participant_id)
+        if not sender:
+            return "You're not in this project."
+        lead = await repo.get_lead(db, sender["project_id"])
+        tasks = await repo.list_tasks_for_owner(db, participant_id)
+        offer_retry = False          # show the Recheck button again only when a username is still missing
+        who_adds = (
+            "You're the lead, so add it on the Cadence website (Team tab)."
+            if lead and lead["id"] == participant_id
+            else f"Ask {(lead or {}).get('name', 'your lead')} to add it on the Cadence website (Team tab)."
+        )
+        if not settings.git_check_enabled:
+            summary = "GitHub checking is switched off for this project, so there is nothing to recheck."
+        elif not sender.get("github_username"):
+            summary = f"I still don't have your GitHub username, and I won't guess one. {who_adds} Then tap Recheck again."
+            offer_retry = True
+        else:
+            todo = [t for t in tasks if t["status"] == "complete" and not t["verified"] and t.get("requires_evidence")]
+            if not todo:
+                summary = "Nothing to recheck: every task you finished is either verified or doesn't need a commit."
+            else:
+                claims = Interpretation(
+                    intent="status_update",
+                    raw_message="recheck",
+                    updates=[
+                        TaskUpdate(task_key=t["key"], status="complete", completion_evidence=t.get("completion_evidence"))
+                        for t in todo
+                    ],
+                )
+                found = await verify_updates(claims, sender=sender, sender_tasks=tasks)
+                lines = [f"Rechecked against @{sender['github_username']}:"]
+                for t in todo:
+                    result = found.get(t["key"])
+                    if result is None:
+                        lines.append(f"- {t['key']}: could not be checked")
+                    elif result.is_verified:
+                        decision = await policy_apply(
+                            interpretation=Interpretation(updates=[TaskUpdate(
+                                task_key=t["key"], status="complete", completion_evidence=t.get("completion_evidence"))]),
+                            sender=sender, project_id=project_id, source_message_id=None, db=db, now=now,
+                            verifications={t["key"]: result}, confirmed=frozenset({"R6"}),
+                        )
+                        for upd in decision.approved:
+                            await _execute_update(upd, project_id, participant_id, None, db, now, sse_publish)
+                        await db.execute(
+                            "UPDATE pending_questions SET status = 'answered', answered_at = ? "
+                            "WHERE task_id = ? AND status = 'open' AND kind = 'verify_completion'",
+                            (now, t["id"]),
+                        )
+                        lines.append(f"- {t['key']}: verified, {result.reason}")
+                    else:
+                        lines.append(f"- {t['key']}: still unverified, {result.reason}")
+                summary = "\n".join(lines)
+
+        batch = NotificationBatch()
+        batch.add(participant_id=participant_id, template_key="GIT_RECHECK", context={"summary": summary},
+                  static_buttons=[("Recheck my tasks", "git:recheck")] if offer_retry else None)
+        await batch.flush(db, now=now)
+        await db.commit()
+    return summary
+
+
 async def _acknowledge(upd, task: dict, db, now: str, msg_id: int | None) -> None:
     """Confirm the new status to the person who reported it (completion is acknowledged by the engine)."""
     if not upd.new_status or upd.new_status == upd.old_status or not task.get("owner_id"):
@@ -462,7 +536,11 @@ async def _acknowledge(upd, task: dict, db, now: str, msg_id: int | None) -> Non
     if upd.new_status == "in_progress":
         batch.add(participant_id=task["owner_id"], template_key="ACK_PROGRESS", context={"task": task})
     elif upd.new_status == "blocked":
-        routing = "I'll flag it to the lead."
+        owner = await repo.get_participant(db, task["owner_id"])
+        if owner and owner.get("role") == "lead":
+            routing = "You're the lead, so there's no one above you to flag this to. Tell me when it clears, or who can help."
+        else:
+            routing = "I'll flag it to the lead."
         if upd.blocker_linked_task_id:
             linked = await repo.get_task(db, upd.blocker_linked_task_id)
             helper = await repo.get_participant(db, linked["owner_id"]) if linked and linked.get("owner_id") else None
@@ -496,7 +574,7 @@ async def _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_
             flags.append(f)
     flags = [f for f in flags if f not in upd.flags_to_remove]
 
-    completion_at = now if upd.new_status == "complete" else None
+    completion_at = now if upd.new_status == "complete" and upd.old_status != "complete" else None
     last_reply_at = now
 
     if upd.new_status is not None:

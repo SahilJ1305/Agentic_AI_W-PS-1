@@ -114,3 +114,21 @@ UNBLOCK_WORKING:
 
 UNBLOCK_DECLINED:
   text: "{upstream_owner} says <b>{upstream_title}</b> isn't theirs, so your blocker on <b>{task_title}</b> (<i>{blocker}</i>) needs a new owner. I've told the lead."
+
+GIT_NO_USERNAME:
+  text: "Marked <b>{task_title}</b> as Complete, but unverified: I don't have your GitHub username, and I won't guess one. {hint} Then tap Recheck and I'll look for your commit."
+
+GIT_NO_USERNAME_LEAD:
+  text: "Heads up: {reporter} marked <b>{task_key} · {task_title}</b> done, but has no GitHub username on the Cadence website, so I couldn't verify it. Add it on the Team tab; {reporter} can then tap Recheck."
+
+GIT_LINKED:
+  text: "Your GitHub username is now set to @{github}. Want me to check the tasks you marked done against your commits?"
+
+GIT_RECHECK:
+  text: "{summary}"
+
+BLOCKER_SELF_REMINDER:
+  text: "Reminder: <b>{task_title}</b> has been blocked on <i>{blocker}</i> for {minutes} min. You're the lead, so there's no one above you to escalate to. Tell me when it's cleared, or who should help."
+
+HANDOFF_SELF:
+  text: "You asked for help with <b>{task_title}</b>. Suggested new owner: {suggested_owner} (skills: {skills}, {open_count} open tasks). Reassign it on the dashboard: open the task and use Lead override."

@@ -169,7 +169,10 @@ def test_explicit_pr():
 
 
 def test_skip_and_error_paths():
-    assert _check(fake_github([]), github_username=None).status == "skipped"
+    # No username on file is its own outcome: we never guess one, and we never call GitHub for it.
+    nobody = fake_github([])
+    result = _check(nobody, github_username=None)
+    assert result.status == "no_username" and not result.checked and nobody.calls == []
     saved, settings.github_repo = settings.github_repo, ""
     try:
         assert _check(fake_github([]), repo="").status == "skipped"

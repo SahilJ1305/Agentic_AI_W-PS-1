@@ -165,6 +165,9 @@ def render_template(template_key: str, context: dict) -> str:
         "{done}":            _esc(context.get("done_count", "")),
         "{total}":           _esc(context.get("total_count", "")),
         "{clarification_question}": _esc(context.get("clarification_question", "")),
+        "{hint}":            _esc(context.get("hint", "")),
+        "{summary}":         _esc(context.get("summary", "")),
+        "{github}":          _esc(context.get("github", "")),
     }
 
     for k, v in replacements.items():
@@ -183,6 +186,7 @@ class _QueuedMessage:
     dedupe_key: str | None = None
     question_kind: str | None = None  # if this message should create a pending_question
     question_task_id: int | None = None
+    static_buttons: list[tuple[str, str]] | None = None   # (label, callback_data); no stored question needed
 
 
 @dataclass
@@ -198,6 +202,7 @@ class NotificationBatch:
         dedupe_key: str | None = None,
         question_kind: str | None = None,
         question_task_id: int | None = None,
+        static_buttons: list[tuple[str, str]] | None = None,
     ) -> None:
         if participant_id is None:
             return
@@ -209,6 +214,7 @@ class NotificationBatch:
                 dedupe_key=dedupe_key,
                 question_kind=question_kind,
                 question_task_id=question_task_id,
+                static_buttons=static_buttons,
             )
         )
 
@@ -264,6 +270,10 @@ class NotificationBatch:
             labels = buttons_for(msg.template_key, ctx)
             if pq_id and labels:
                 buttons_json = build_inline_keyboard(msg.template_key, pq_id, ctx)
+            elif msg.static_buttons:
+                buttons_json = json.dumps(
+                    [[{"text": label, "callback_data": data}] for label, data in msg.static_buttons]
+                )
 
             outbox_id = await repo.enqueue_message(
                 db,

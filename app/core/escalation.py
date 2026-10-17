@@ -156,6 +156,8 @@ async def _blocker_ladder(db: aiosqlite.Connection, now: datetime, result: dict)
         stamp = now.isoformat()
         base = {"task": task, "blocker": blocker, "reporter": (owner or {}).get("name", "The owner")}
 
+        owner_is_lead = bool(owner and lead and owner["id"] == lead["id"])
+
         if level == 0 and age_min >= step:
             unblocker = await _unblocker(db, blocker)
             if unblocker and unblocker["id"] != (owner or {}).get("id"):
@@ -164,6 +166,15 @@ async def _blocker_ladder(db: aiosqlite.Connection, now: datetime, result: dict)
                           context={**base, "unblocker": unblocker["name"], "upstream_task": upstream or {}},
                           dedupe_key=f"blocker-remind:{blocker['id']}")
                 result["blocker_reminders"] += 1
+            elif owner_is_lead:
+                # Nobody above the lead to escalate to: remind her once, then leave it to the digest.
+                batch.add(participant_id=owner["id"], template_key="BLOCKER_SELF_REMINDER",
+                          context={**base, "minutes": round(age_min)},
+                          dedupe_key=f"blocker-self:{blocker['id']}")
+                result["blocker_reminders"] += 1
+                await _set_level(db, blocker["id"], 2)
+                await batch.flush(db, now=stamp)
+                continue
             elif lead:
                 batch.add(participant_id=lead["id"], template_key="BLOCKER_ESCALATED",
                           context={**base, "minutes": round(age_min)},
@@ -171,7 +182,7 @@ async def _blocker_ladder(db: aiosqlite.Connection, now: datetime, result: dict)
                 result["blocker_alerts"] += 1
             await _set_level(db, blocker["id"], 1)
         elif level == 1 and age_min >= 2 * step:
-            if lead:
+            if lead and not owner_is_lead:
                 batch.add(participant_id=lead["id"], template_key="BLOCKER_ESCALATED",
                           context={**base, "minutes": round(age_min)},
                           dedupe_key=f"blocker-escalate:{blocker['id']}:2")
