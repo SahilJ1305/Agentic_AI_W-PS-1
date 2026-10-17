@@ -74,6 +74,11 @@ export const cadence = {
     return request(`/projects/${pid}/documents`, { method: 'POST', form });
   },
   uploadSpec: (pid, file) => cadence.uploadDocument(pid, 'spec', file),
+  reviseFromMeeting: (pid, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request(`/projects/${pid}/meeting`, { method: 'POST', form });
+  },
   runPlan: (pid) => request(`/projects/${pid}/plan`, { method: 'POST' }),
   getPlan: (pid, draftId) => request(`/projects/${pid}/plan/${draftId}`),
   commitPlan: (pid, draftId, body) =>

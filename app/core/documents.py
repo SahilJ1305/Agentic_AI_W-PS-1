@@ -210,19 +210,46 @@ async def ensure_participants_from_spec(
     return created
 
 
+async def _apply_revision(db, existing: dict, row: dict, before: dict | None, owner_id, deadline, now: str) -> None:
+    """Copy what a spec revision changed about an existing task. Unchanged cells are left alone."""
+    changes: dict = {}
+    if row["title"] != existing["title"]:
+        changes["title"] = row["title"]
+    if owner_id is not None and owner_id != existing.get("owner_id"):
+        changes["owner_id"] = owner_id
+    # Deadlines are relative ("today 18:00"): re-reading an unchanged cell on a later day would move it.
+    if before is not None and row["deadline"] != before["deadline"] and deadline:
+        changes["deadline"] = deadline
+    if before is not None and row["notes"] != before["notes"]:
+        changes["description"] = row["notes"] or None
+    if not changes:
+        return
+    await repo.update_task_details(db, existing["id"], updated_at=now, **changes)
+    await repo.append_task_event(
+        db, task_id=existing["id"], event_type="override",
+        new_value=", ".join(sorted("owner" if k == "owner_id" else k for k in changes)),
+        reason="Updated from the revised spec", actor="system", now=now,
+    )
+
+
 async def import_task_document(
     db: aiosqlite.Connection,
     project_id: int,
     task_doc_text: str,
     now: str,
+    previous_text: str | None = None,
 ) -> dict:
     """
     Write tasks, owners, deadlines and dependencies from a task table.
     Existing keys keep their id; status is updated when the document disagrees.
+
+    previous_text is the earlier version of a revised spec. Then live statuses are kept (the team has
+    moved on since v1) and existing tasks only take the title, owner and deadline the revision changed.
     """
     rows = parse_task_table(task_doc_text)
     if not rows:
         return {"tasks": 0, "dependencies": 0}
+    previous = {r["key"]: r for r in parse_task_table(previous_text)} if previous_text is not None else None
 
     current = datetime.now(ZoneInfo(settings.timezone))
     participants = {
@@ -254,6 +281,10 @@ async def import_task_document(
         owner_id = owner["id"] if owner else None
         deadline = parse_deadline(row["deadline"], current)
         existing = await repo.get_task_by_key(db, project_id, row["key"])
+        if existing and previous is not None:
+            task_ids[row["key"]] = existing["id"]
+            await _apply_revision(db, existing, row, previous.get(row["key"]), owner_id, deadline, now)
+            continue
         if existing:
             task_ids[row["key"]] = existing["id"]
             if row["status"] != existing["status"]:
