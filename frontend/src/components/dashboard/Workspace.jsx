@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
-import { Activity, ClipboardList, FileText, KanbanSquare, Network, Users } from 'lucide-react';
 import StatTiles from './StatTiles';
 import { useProjectData } from '../../hooks/useProjectData';
-import { TABS } from './helpers';
 import Header from './Header';
 import Board from './Board';
 import DependencyGraph from './DependencyGraph';
@@ -13,8 +11,6 @@ import Reports from './Reports';
 import Team from './Team';
 import TaskDrawer from './TaskDrawer';
 import { ErrorNote, LoadingBlock } from './ui';
-
-const TAB_ICONS = { board: KanbanSquare, graph: Network, activity: Activity, plan: ClipboardList, reports: FileText, team: Users };
 
 /** Everything that belongs to one project. Mounted with key={projectId} so state resets on switch. */
 const Workspace = ({ projectId, project, headerProps }) => {
@@ -45,33 +41,12 @@ const Workspace = ({ projectId, project, headerProps }) => {
         summary={summary}
         onRefresh={data.refresh}
         onOpenReports={() => setTab('reports')}
+        tab={tab}
+        onSelectTab={setTab}
+        badge={badge}
       />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-5 space-y-4">
-        <nav className="-mx-4 sm:mx-0 px-4 sm:px-0 overflow-x-auto" aria-label="Dashboard sections">
-          <div className="inline-flex gap-1 bg-slate-100 rounded-2xl p-1 min-w-max" role="tablist">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                role="tab"
-                aria-selected={tab === t.id}
-                onClick={() => setTab(t.id)}
-                className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-xl transition-colors ${
-                  tab === t.id ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                {React.createElement(TAB_ICONS[t.id], { className: 'w-4 h-4', 'aria-hidden': true })}
-                {t.label}
-                {badge(t.id) !== null && (
-                  <span className={`ml-1.5 text-[11px] rounded-full px-1.5 ${tab === t.id ? 'bg-blue-50 text-blue-600' : 'bg-slate-200 text-slate-600'}`}>
-                    {badge(t.id)}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        </nav>
+      <div className="w-full px-4 sm:px-6 lg:px-8 xl:px-10 py-5 space-y-4">
 
         {data.error && (
           <div className="flex items-center gap-3">

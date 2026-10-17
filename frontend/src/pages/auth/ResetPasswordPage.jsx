@@ -45,14 +45,14 @@ const ResetPasswordPage = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-8 border border-gray-100">
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-blue-50/60 via-slate-50 to-white">
+      <div className="w-full max-w-md bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 sm:p-10 border border-slate-200/80">
         <div className="text-center mb-8">
-          <div className="mx-auto bg-blue-100 p-3 rounded-xl w-fit mb-4">
-            <Lock className="h-8 w-8 text-blue-600" />
+          <div className="mx-auto bg-blue-50 p-3.5 rounded-2xl w-fit mb-4 text-blue-600 ring-1 ring-blue-100 shadow-2xs">
+            <Lock className="h-7 w-7" />
           </div>
-          <h2 className="text-3xl font-bold text-gray-900">Set New Password</h2>
-          <p className="text-gray-500 mt-2 text-sm">Enter your new password below.</p>
+          <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900">Set New Password</h2>
+          <p className="text-slate-500 mt-1.5 text-sm">Enter your new password below.</p>
         </div>
 
         {success ? (

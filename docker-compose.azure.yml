@@ -1,0 +1,34 @@
+# Azure VM deployment: the production stack plus an HTTPS front door.
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.azure.yml up -d --build
+#
+# Needs SITE_ADDRESS (the public host name), PUBLIC_AUTH_API_URL and PUBLIC_CADENCE_API_URL in .env,
+# all pointing at https://<SITE_ADDRESS>. Only Caddy publishes ports; the services are reachable through it.
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data              # certificates: keep this volume
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - backend
+      - cadence
+
+  frontend:
+    ports: !reset []
+  backend:
+    ports: !reset []
+  cadence:
+    ports: !reset []
+
+volumes:
+  caddy_data:
+  caddy_config:

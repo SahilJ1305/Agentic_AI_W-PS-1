@@ -92,7 +92,7 @@ const PlanTasks = ({ model, people, owners, setOwners, selection, onFocus, onGoT
             <span className="text-xs text-slate-500">{note} · {tasks.length} task{tasks.length === 1 ? '' : 's'}</span>
             <span className="h-px flex-1 bg-slate-200" aria-hidden="true" />
           </div>
-          <ul className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <ul className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {tasks.map((task) => (
               <TaskCard
                 key={task.key}

@@ -42,22 +42,22 @@ const VerifyOtpPage = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-8 border border-gray-100">
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-blue-50/60 via-slate-50 to-white">
+      <div className="w-full max-w-md bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 sm:p-10 border border-slate-200/80">
         <button
           onClick={() => navigate('/forgot-password')}
-          className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-2 mb-6"
+          className="text-sm font-semibold text-slate-500 hover:text-slate-800 flex items-center gap-2 mb-6 transition-colors"
         >
           <ArrowLeft className="h-4 w-4" /> Change Email
         </button>
 
         <div className="text-center mb-8">
-          <div className="mx-auto bg-blue-100 p-3 rounded-xl w-fit mb-4">
-            <ShieldCheck className="h-8 w-8 text-blue-600" />
+          <div className="mx-auto bg-blue-50 p-3.5 rounded-2xl w-fit mb-4 text-blue-600 ring-1 ring-blue-100 shadow-2xs">
+            <ShieldCheck className="h-7 w-7" />
           </div>
-          <h2 className="text-3xl font-bold text-gray-900">Verify Code</h2>
-          <p className="text-gray-500 mt-2 text-sm">
-            Sent to <span className="font-semibold text-gray-900">{email}</span>
+          <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900">Verify Code</h2>
+          <p className="text-slate-500 mt-1.5 text-sm">
+            Sent to <span className="font-semibold text-slate-900">{email}</span>
           </p>
         </div>
 

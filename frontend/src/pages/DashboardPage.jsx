@@ -89,15 +89,15 @@ const DashboardPage = () => {
 
       {showNew && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="New project">
-          <button type="button" aria-label="Close" onClick={() => setShowNew(false)} className="absolute inset-0 bg-slate-900/30 cursor-default" />
-          <div className="relative w-full max-w-md bg-white rounded-2xl border border-slate-200 p-6 shadow-2xl">
-            <div className="flex items-start justify-between mb-1">
-              <h2 className="text-lg font-bold text-slate-900">New project from a spec</h2>
-              <button type="button" onClick={() => setShowNew(false)} aria-label="Close" className="p-1 rounded-lg hover:bg-slate-100 text-slate-500">
+          <button type="button" aria-label="Close" onClick={() => setShowNew(false)} className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs cursor-default" />
+          <div className="relative w-full max-w-md bg-white rounded-3xl border border-slate-200/90 p-7 shadow-2xl">
+            <div className="flex items-start justify-between mb-1.5">
+              <h2 className="text-xl font-bold text-slate-900">New project from a spec</h2>
+              <button type="button" onClick={() => setShowNew(false)} aria-label="Close" className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <p className="text-sm text-slate-500 mb-4">Cadence drafts tasks from the spec. Teammates then join through their Telegram invite links.</p>
+            <p className="text-sm text-slate-500 mb-5 leading-relaxed">Cadence drafts tasks from the spec. Teammates then join through their Telegram invite links.</p>
             <NewProjectCard onCreated={created} />
           </div>
         </div>

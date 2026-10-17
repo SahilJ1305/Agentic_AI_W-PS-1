@@ -293,9 +293,9 @@ const TaskDrawer = ({ taskId, tasks, people, dataTick, onClose, onOpenTask, onCh
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={`Task ${shown.key || ''}`}>
-      <button type="button" aria-label="Close panel" onClick={onClose} className="absolute inset-0 bg-slate-900/30 cursor-default" />
-      <aside className="relative w-full sm:max-w-lg bg-white h-full overflow-y-auto shadow-2xl">
-        <header className="sticky top-0 z-10 bg-white border-b border-slate-200 px-5 py-4 flex items-start gap-3">
+      <button type="button" aria-label="Close panel" onClick={onClose} className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs cursor-default" />
+      <aside className="relative w-full sm:max-w-lg bg-white h-full overflow-y-auto shadow-2xl border-l border-slate-200/90">
+        <header className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b border-slate-200 px-6 py-4 flex items-start gap-3">
           <div className="flex-1 min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-lg font-extrabold text-slate-900">{shown.key}</span>
@@ -303,14 +303,14 @@ const TaskDrawer = ({ taskId, tasks, people, dataTick, onClose, onOpenTask, onCh
               {shown.readiness && <Chip tone={shown.readiness === 'waiting' ? 'amber' : 'green'}>{shown.readiness}</Chip>}
               {Boolean(shown.on_critical_path) && <Chip tone="red">critical path</Chip>}
             </div>
-            <p className="text-sm text-slate-700 mt-0.5">{shown.title}</p>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {shown.owner_name || 'Unassigned'}
+            <p className="text-sm font-semibold text-slate-800 mt-1">{shown.title}</p>
+            <p className="text-xs text-slate-500 mt-1">
+              <span className="font-medium text-slate-700">{shown.owner_name || 'Unassigned'}</span>
               {shown.deadline ? ` · due ${shortDate(shown.deadline)}` : ''}
               {shown.eta ? ` · ETA ${shortDate(shown.eta)}` : ''}
             </p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500">
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors">
             <X className="w-5 h-5" />
           </button>
         </header>

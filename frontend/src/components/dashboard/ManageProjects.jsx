@@ -77,14 +77,14 @@ const ManageProjects = ({ projects, currentProjectId, onClose, onDeleted }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Manage projects">
-      <button type="button" aria-label="Close" onClick={() => !busy && onClose()} className="absolute inset-0 cursor-default bg-slate-900/30" />
-      <div className="relative flex max-h-[90vh] w-full max-w-lg flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl">
-        <div className="flex items-start justify-between border-b border-slate-100 p-5">
+      <button type="button" aria-label="Close" onClick={() => !busy && onClose()} className="absolute inset-0 cursor-default bg-slate-900/40 backdrop-blur-xs" />
+      <div className="relative flex max-h-[90vh] w-full max-w-lg flex-col rounded-3xl border border-slate-200/90 bg-white shadow-2xl overflow-hidden">
+        <div className="flex items-start justify-between border-b border-slate-100 p-6">
           <div>
-            <h2 className="text-lg font-bold text-slate-900">Manage projects</h2>
-            <p className="mt-0.5 text-sm text-slate-500">{confirming ? 'Last step: this cannot be undone.' : 'Select the projects you want to delete.'}</p>
+            <h2 className="text-xl font-bold text-slate-900">Manage projects</h2>
+            <p className="mt-1 text-sm text-slate-500">{confirming ? 'Last step: this cannot be undone.' : 'Select the projects you want to delete.'}</p>
           </div>
-          <button type="button" onClick={onClose} disabled={busy} aria-label="Close" className="rounded-lg p-1 text-slate-500 hover:bg-slate-100">
+          <button type="button" onClick={onClose} disabled={busy} aria-label="Close" className="rounded-xl p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
             <X className="h-5 w-5" />
           </button>
         </div>

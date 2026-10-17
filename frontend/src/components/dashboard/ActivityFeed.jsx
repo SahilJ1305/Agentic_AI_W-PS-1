@@ -180,7 +180,7 @@ const ActivityFeed = ({ events, messages, liveEntries, interps, loading }) => {
   }
 
   return (
-    <div className="max-w-3xl mx-auto space-y-3">
+    <div className="w-full space-y-3">
       <p className="text-sm text-slate-500">
         Each card is one Telegram message: what was said, how Cadence understood it, which rules decided the outcome, and what changed.
       </p>

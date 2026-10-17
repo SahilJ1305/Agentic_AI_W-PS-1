@@ -93,16 +93,16 @@ function parseBlocks(source) {
 }
 
 const HEADING_CLASS = {
-  1: 'text-lg font-bold text-slate-900 mt-4 first:mt-0',
+  1: 'text-xl font-extrabold text-slate-900 mt-5 first:mt-0 tracking-tight pb-2 border-b border-slate-100',
   2: 'text-base font-bold text-slate-900 mt-4 first:mt-0',
-  3: 'text-sm font-bold text-slate-800 mt-3 first:mt-0',
-  4: 'text-sm font-semibold text-slate-700 mt-3 first:mt-0',
+  3: 'text-sm font-bold text-blue-950 mt-3.5 first:mt-0',
+  4: 'text-xs font-bold uppercase tracking-wider text-slate-500 mt-3 first:mt-0',
 };
 
 const Markdown = ({ source }) => {
   const blocks = parseBlocks(source);
   return (
-    <div className="text-sm text-slate-700 space-y-2 leading-relaxed break-words">
+    <div className="text-sm text-slate-700 space-y-2.5 leading-relaxed break-words">
       {blocks.map((block, index) => {
         const key = `b${index}`;
         switch (block.type) {
@@ -111,35 +111,39 @@ const Markdown = ({ source }) => {
             return <Tag key={key} className={HEADING_CLASS[block.level]}>{renderInline(block.text, key)}</Tag>;
           }
           case 'hr':
-            return <hr key={key} className="border-slate-200" />;
+            return <hr key={key} className="border-t border-slate-200 my-4" />;
           case 'code':
-            return <pre key={key} className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs overflow-x-auto">{block.text}</pre>;
+            return <pre key={key} className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs font-mono overflow-x-auto text-slate-800">{block.text}</pre>;
           case 'quote':
-            return <blockquote key={key} className="border-l-4 border-slate-200 pl-3 text-slate-500 italic">{renderInline(block.text, key)}</blockquote>;
+            return (
+              <blockquote key={key} className="border-l-4 border-blue-500 bg-blue-50/70 rounded-r-xl px-4 py-2.5 my-3 text-slate-800 text-xs sm:text-sm font-medium shadow-2xs">
+                {renderInline(block.text, key)}
+              </blockquote>
+            );
           case 'list': {
             const List = block.ordered ? 'ol' : 'ul';
             return (
-              <List key={key} className={`${block.ordered ? 'list-decimal' : 'list-disc'} pl-5 space-y-1`}>
-                {block.items.map((item, n) => <li key={`${key}-${n}`}>{renderInline(item, `${key}-${n}`)}</li>)}
+              <List key={key} className={`${block.ordered ? 'list-decimal' : 'list-disc'} pl-5 space-y-1.5 my-2`}>
+                {block.items.map((item, n) => <li key={`${key}-${n}`} className="text-slate-700">{renderInline(item, `${key}-${n}`)}</li>)}
               </List>
             );
           }
           case 'table':
             return (
-              <div key={key} className="overflow-x-auto border border-slate-200 rounded-xl">
+              <div key={key} className="overflow-x-auto border border-slate-200/90 rounded-2xl shadow-2xs my-3.5 bg-white">
                 <table className="min-w-full text-xs">
-                  <thead className="bg-slate-50 text-slate-500">
+                  <thead className="bg-slate-50/90 border-b border-slate-200 text-slate-700">
                     <tr>
                       {block.head.map((cell, n) => (
-                        <th key={n} className="text-left font-semibold px-3 py-2 whitespace-nowrap">{renderInline(cell, `${key}h${n}`)}</th>
+                        <th key={n} className="text-left font-bold uppercase tracking-wider text-[11px] px-3.5 py-2.5 whitespace-nowrap">{renderInline(cell, `${key}h${n}`)}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {block.rows.map((row, r) => (
-                      <tr key={r} className="border-t border-slate-100">
+                      <tr key={r} className="border-t border-slate-100 hover:bg-blue-50/30 transition-colors">
                         {row.map((cell, n) => (
-                          <td key={n} className="px-3 py-2 align-top">{renderInline(cell, `${key}r${r}c${n}`)}</td>
+                          <td key={n} className="px-3.5 py-2.5 text-slate-700 align-top">{renderInline(cell, `${key}r${r}c${n}`)}</td>
                         ))}
                       </tr>
                     ))}

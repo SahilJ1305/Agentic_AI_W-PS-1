@@ -1,0 +1,22 @@
+# Public entry point on the Azure VM: HTTPS (automatic certificate) in front of the three services.
+# The dashboard calls one address for everything, so browsers never make cross-origin requests.
+{$SITE_ADDRESS} {
+	# Sign-up and login belong to the login service...
+	@auth path /api/auth/* /api/users /api/users/*
+	handle @auth {
+		reverse_proxy backend:8001
+	}
+
+	# ...every other /api route belongs to Cadence (flush_interval -1 keeps the live event stream flowing).
+	handle /api/* {
+		reverse_proxy cadence:8000 {
+			flush_interval -1
+		}
+	}
+
+	# Everything else is the dashboard.
+	handle {
+		encode gzip
+		reverse_proxy frontend:80
+	}
+}

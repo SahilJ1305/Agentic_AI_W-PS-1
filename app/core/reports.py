@@ -118,12 +118,38 @@ def render_digest(view: ProjectView, since: datetime, now: datetime) -> tuple[st
         footer += f" · next deadline: {nd[1]['key']} {human_rel(nd[0], now)}"
     summary = _summary_line(view)
 
-    md = [f"# {name}: update", f"_{_stamp(now)}_", ""]
+    health_label = "🔴 Blocked / Attention Required" if s["blocked"] else ("🟠 At Risk / Monitor" if s["at_risk"] else "🟢 Healthy / On Track")
+    pct = round((s["complete"] / s["total"]) * 100) if s["total"] else 0
+
+    md = [
+        f"# {name}: update",
+        f"_{_stamp(now)}_ · Operational Status & Executive Digest",
+        "",
+        f"> **Executive Summary:** {summary}",
+        f"> **Health Status:** {health_label} · {s['complete']}/{s['total']} complete ({pct}%)",
+        "",
+        "### 📊 Key Performance Indicators",
+        "| Metric | Status | Details |",
+        "|---|---|---|",
+        f"| Progress | {pct}% | {s['complete']} of {s['total']} tasks complete |",
+        f"| Active Work | {len(s['in_progress'])} in progress | Tasks actively being developed |",
+        f"| Blockers | {len(s['blocked'])} blocked | Roadblocks requiring unblocking |",
+        f"| At-Risk Items | {len(s['at_risk'])} flagged | Potential timeline or dependency slips |",
+        f"| Next Milestone | {_cell(nd[1]['key'] if nd else 'None')} | {_cell(human_rel(nd[0], now) if nd else 'No upcoming deadlines')} |",
+        "",
+        "### 📋 Operational Breakdown",
+    ]
     for title, items in blocks:
         md.append(f"**{title}**")
         md.extend(f"- {i}" for i in items)
         md.append("")
-    md += [summary, "", footer]
+    md += [
+        "---",
+        "### 💡 Next Steps & Summary",
+        summary,
+        "",
+        footer,
+    ]
 
     tg = [f"<b>{html.escape(name)}: update</b> ({_stamp(now)})"]
     for title, items in blocks:
@@ -224,8 +250,19 @@ def render_risk(view: ProjectView, now: datetime) -> tuple[str, str]:
     name = view.project.get("name", "Project")
     md = [f"# Risk report: {name} ({_stamp(now)})", ""]
     tg = [f"<b>Risk report: {html.escape(name)}</b> ({_stamp(now)})"]
+
+    high_count = sum(1 for r in view.risks if r.level == "high")
+    med_count = sum(1 for r in view.risks if r.level == "medium")
+
     if view.risks:
-        md += ["| Task | Owner | Risk | Why | Suggested action |", "|---|---|---|---|---|"]
+        md += [
+            f"> **Risk Overview:** {len(view.risks)} tasks flagged ({high_count} high severity, {med_count} medium).",
+            "> **Recommendation:** Prioritize high-risk items on the critical path to prevent delivery slips.",
+            "",
+            "### 🚨 Risk Assessment Matrix",
+            "| Task | Owner | Risk | Why | Suggested action |",
+            "|---|---|---|---|---|",
+        ]
         for r in view.risks:
             md.append(
                 f"| {_cell(r.task_key + ' ' + r.task_title)} | {_cell(r.owner_name)} | "
@@ -235,11 +272,19 @@ def render_risk(view: ProjectView, now: datetime) -> tuple[str, str]:
                 f"\n{LEVEL_ICON.get(r.level, '•')} <b>{html.escape(r.task_key)} {html.escape(r.task_title)}</b>"
                 f" ({html.escape(r.owner_name or 'unassigned')})\n{html.escape(r.why)}\n→ {html.escape(r.action)}"
             )
+        md += [
+            "",
+            "### 🛠️ Lead Action Items",
+            "- Reach out to task owners on Telegram for blocked dependencies.",
+            "- Reassign or split tasks that have unresolved external blockers.",
+        ]
     else:
+        md.append("> **Risk Overview:** All tasks are healthy with no active risks flagged.")
+        md.append("")
         md.append("No tasks are at risk right now.")
         tg.append("\nNo tasks are at risk right now.")
     rules = risk_rules.rules_line()
-    md += ["", rules]
+    md += ["", "---", rules]
     tg += ["", html.escape(rules)]
     return "\n".join(md), "\n".join(tg)
 

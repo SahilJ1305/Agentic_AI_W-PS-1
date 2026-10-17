@@ -50,31 +50,31 @@ const NewProjectCard = ({ onCreated }) => {
   };
 
   return (
-    <form onSubmit={submit} className="space-y-3">
-      <label className="block text-xs font-medium text-slate-600">
+    <form onSubmit={submit} className="space-y-4">
+      <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
         Project name
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Defaults to the file name" className={`${inputClass} mt-1`} />
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Defaults to the spec file name" className={`${inputClass} mt-1.5`} />
       </label>
-      <label className="block text-xs font-medium text-slate-600">
-        Project spec (Markdown)
+      <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
+        Project spec (Markdown) <span className="text-red-500">*</span>
         <input
           type="file"
           accept=".md,.markdown,.txt"
           required
           onChange={(e) => setSpec(e.target.files?.[0] || null)}
-          className="mt-1 block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-blue-700"
+          className="mt-1.5 block w-full text-sm text-slate-600 border border-slate-200 rounded-xl bg-slate-50/50 p-2 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-xs file:font-bold file:text-blue-700 hover:file:bg-blue-100 cursor-pointer transition-all"
         />
       </label>
-      <label className="block text-xs font-medium text-slate-600">
-        Task doc (optional, a table of tasks to import as-is)
+      <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
+        Task doc <span className="normal-case text-slate-400 font-normal">(optional, pre-structured tasks)</span>
         <input
           type="file"
           accept=".md,.markdown,.txt"
           onChange={(e) => setTaskDoc(e.target.files?.[0] || null)}
-          className="mt-1 block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-slate-700"
+          className="mt-1.5 block w-full text-sm text-slate-600 border border-slate-200 rounded-xl bg-slate-50/50 p-2 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-bold file:text-slate-700 hover:file:bg-slate-200 cursor-pointer transition-all"
         />
       </label>
-      <button type="submit" disabled={busy} className={`${primaryButton} w-full`}>
+      <button type="submit" disabled={busy} className={`${primaryButton} w-full !py-2.5 mt-2`}>
         {busy ? <Spinner className="w-4 h-4 !text-white" /> : <Upload className="w-4 h-4" />}
         {busy ? step || 'Working…' : 'Create project'}
       </button>

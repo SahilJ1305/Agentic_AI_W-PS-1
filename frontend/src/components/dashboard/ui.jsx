@@ -13,20 +13,24 @@ export const LoadingBlock = ({ label = 'Loading…' }) => (
 );
 
 export const EmptyState = ({ icon: Icon, title, children, action }) => (
-  <div className="bg-white border border-dashed border-slate-300 rounded-2xl px-6 py-10 text-center">
-    {Icon && <Icon className="w-8 h-8 text-slate-300 mx-auto mb-3" />}
-    <p className="text-sm font-semibold text-slate-700">{title}</p>
-    {children && <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">{children}</p>}
-    {action && <div className="mt-4">{action}</div>}
+  <div className="bg-white border border-dashed border-slate-300 rounded-2xl px-6 py-12 text-center shadow-xs">
+    {Icon && (
+      <div className="w-12 h-12 rounded-2xl bg-blue-50/70 text-blue-600 ring-1 ring-blue-100 flex items-center justify-center mx-auto mb-3.5">
+        <Icon className="w-6 h-6" />
+      </div>
+    )}
+    <p className="text-base font-bold text-slate-800">{title}</p>
+    {children && <p className="text-sm text-slate-500 mt-1.5 max-w-md mx-auto leading-relaxed">{children}</p>}
+    {action && <div className="mt-5">{action}</div>}
   </div>
 );
 
 export const Panel = ({ icon: Icon, title, actions, children, className = '' }) => (
-  <section className={`bg-white rounded-2xl border border-slate-200 shadow-sm p-5 ${className}`}>
+  <section className={`bg-white rounded-2xl border border-slate-200/90 shadow-xs p-5 sm:p-6 transition-all ${className}`}>
     {(title || actions) && (
-      <div className="flex items-center justify-between gap-3 mb-3">
-        <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          {Icon && <Icon className="w-4 h-4" />} {title}
+      <div className="flex items-center justify-between gap-3 mb-3.5">
+        <h2 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-500">
+          {Icon && <Icon className="w-4 h-4 text-blue-600" />} {title}
         </h2>
         {actions}
       </div>
@@ -36,19 +40,19 @@ export const Panel = ({ icon: Icon, title, actions, children, className = '' }) 
 );
 
 const TONES = {
-  slate: 'bg-slate-100 text-slate-600',
-  blue: 'bg-blue-50 text-blue-700',
-  green: 'bg-emerald-50 text-emerald-700',
-  amber: 'bg-amber-50 text-amber-700',
-  orange: 'bg-orange-50 text-orange-700',
-  red: 'bg-red-50 text-red-700',
-  violet: 'bg-violet-50 text-violet-700',
+  slate: 'bg-slate-100 text-slate-600 border border-slate-200/60',
+  blue: 'bg-blue-50 text-blue-700 border border-blue-200/60',
+  green: 'bg-emerald-50 text-emerald-700 border border-emerald-200/60',
+  amber: 'bg-amber-50 text-amber-700 border border-amber-200/60',
+  orange: 'bg-orange-50 text-orange-700 border border-orange-200/60',
+  red: 'bg-red-50 text-red-700 border border-red-200/60',
+  violet: 'bg-violet-50 text-violet-700 border border-violet-200/60',
 };
 
 export const Chip = ({ tone = 'slate', icon: Icon, children, title, className = '' }) => (
   <span
     title={title}
-    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${TONES[tone]} ${className}`}
+    className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${TONES[tone] || TONES.slate} ${className}`}
   >
     {Icon && <Icon className="w-3 h-3" />} {children}
   </span>

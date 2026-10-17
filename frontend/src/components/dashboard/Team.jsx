@@ -129,12 +129,12 @@ const MemberCard = ({ pid, person, gitCheck, onChanged }) => {
   const skills = (person.skills || '').split(',').map((s) => s.trim()).filter(Boolean);
   const joined = Boolean(person.telegram_chat_id);
   return (
-    <article className="bg-white border border-slate-200 rounded-2xl p-4">
+    <article className="bg-white border border-slate-200/90 hover:border-slate-300 rounded-2xl p-5 shadow-xs hover:shadow-sm transition-all duration-200">
       <div className="flex flex-wrap items-center gap-2">
-        <span aria-hidden="true" className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-50 text-[11px] font-bold text-blue-700">
+        <span aria-hidden="true" className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-50 ring-1 ring-blue-100 text-xs font-bold text-blue-700 shadow-2xs">
           {String(person.name || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('')}
         </span>
-        <h3 className="font-semibold text-slate-900">{person.name}</h3>
+        <h3 className="font-bold text-slate-900 text-base">{person.name}</h3>
         <Chip tone={person.role === 'lead' ? 'blue' : 'slate'}>{person.role}</Chip>
         <Chip tone={state.tone} icon={state.label === 'Paused' ? PauseCircle : state.label === 'On Telegram' ? Send : undefined}>{state.label}</Chip>
         {missingGithub && <Chip tone="amber" icon={Github}>No GitHub username</Chip>}

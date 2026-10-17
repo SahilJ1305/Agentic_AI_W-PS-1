@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { User, Mail, Lock } from "lucide-react";
+import { User, Mail, Lock, Sparkles } from "lucide-react";
 import { useAuthStore } from '../../authStore';
 import { API_BASE_URL } from "../../api/apiConfig";
 
@@ -78,12 +78,18 @@ const SignupPage = () => {
   }, [loginWithToken, navigate]);
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8 sm:p-10 border border-slate-100">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50/60 via-slate-50 to-white flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 sm:p-10 border border-slate-200/80">
         
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-extrabold text-slate-900">Create Account</h1>
-          <p className="text-slate-500 mt-2 text-sm">Join us and start building today</p>
+          <Link to="/" className="inline-flex items-center gap-2 mb-4 group">
+            <span className="p-2.5 rounded-xl bg-gradient-to-r from-blue-700 to-indigo-600 text-white shadow-md shadow-blue-500/20 group-hover:scale-105 transition-transform">
+              <Sparkles className="w-5 h-5" />
+            </span>
+            <span className="text-xl font-extrabold tracking-tight text-slate-900">Cadence</span>
+          </Link>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900">Create Account</h1>
+          <p className="text-slate-500 mt-1.5 text-sm">Join Cadence and coordinate your projects</p>
         </div>
 
         <form onSubmit={handleSignup} className="space-y-5">

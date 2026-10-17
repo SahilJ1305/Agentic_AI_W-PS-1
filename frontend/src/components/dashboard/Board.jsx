@@ -37,25 +37,25 @@ export const TaskCard = ({ task, accent, flashing, onOpen }) => {
 
   return (
     <article
-      className={`bg-white border border-slate-200 border-l-4 ${accent} rounded-xl mb-2 shadow-sm transition-shadow hover:shadow-md ${flashing ? 'cadence-flash' : ''}`}
+      className={`bg-white border border-slate-200/90 border-l-4 ${accent} rounded-xl mb-2.5 shadow-xs transition-all duration-200 hover:shadow-md hover:border-blue-300 ${flashing ? 'cadence-flash' : ''}`}
     >
-      <button type="button" onClick={() => onOpen(task.id)} className="block w-full text-left p-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-300">
+      <button type="button" onClick={() => onOpen(task.id)} className="block w-full text-left p-3.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-300">
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-          <span>{task.key}</span>
+          <span className="font-mono text-xs font-bold bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200/60">{task.key}</span>
           <span className="text-slate-300">·</span>
-          <span className={`truncate ${task.owner_name ? '' : 'text-slate-400 font-medium'}`}>{task.owner_name || 'Unassigned'}</span>
+          <span className={`truncate text-xs ${task.owner_name ? 'text-slate-600 font-semibold' : 'text-slate-400 font-medium'}`}>{task.owner_name || 'Unassigned'}</span>
           <span className="ml-auto flex items-center gap-1.5 shrink-0">
             {Boolean(task.on_critical_path) && (
-              <span title="On the critical path" className="text-rose-600"><Flag className="w-3.5 h-3.5" /></span>
+              <span title="On the critical path" className="text-rose-600 bg-rose-50 p-1 rounded-md border border-rose-100"><Flag className="w-3 h-3" /></span>
             )}
             <RiskDot risk={task.risk} />
           </span>
         </div>
-        <div className="text-sm text-slate-700 mt-0.5">{task.title}</div>
+        <div className="text-sm font-semibold text-slate-800 mt-1 leading-snug">{task.title}</div>
 
         {showWaiting && (
-          <div className="mt-1.5 flex items-center gap-1 text-xs text-slate-500">
-            <Hourglass className="w-3 h-3" />
+          <div className="mt-1.5 flex items-center gap-1 text-xs text-slate-500 font-medium">
+            <Hourglass className="w-3 h-3 text-slate-400" />
             {waitingOn.length ? `Waiting on ${waitingOn.join(', ')}` : 'Waiting on an upstream task'}
           </div>
         )}
@@ -178,14 +178,14 @@ const Board = ({ tasks, blockers, flashing, onOpen, onChanged, onGoToPlan }) => 
         {STATUSES.map((column) => {
           const columnTasks = tasks.filter((t) => t.status === column.status);
           return (
-            <div key={column.status} className="min-w-0 rounded-2xl bg-slate-100/60 p-2.5">
-              <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: column.stroke }} aria-hidden="true" />
-                {column.label}
-                <span className="rounded-full bg-slate-200 text-slate-600 px-1.5 text-[11px]">{columnTasks.length}</span>
+            <div key={column.status} className="min-w-0 rounded-2xl bg-slate-100/70 border border-slate-200/60 p-3 shadow-2xs">
+              <h2 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-600 mb-2.5 px-1">
+                <span className="h-2.5 w-2.5 rounded-full ring-2 ring-white shadow-xs shrink-0" style={{ backgroundColor: column.stroke }} aria-hidden="true" />
+                <span>{column.label}</span>
+                <span className="rounded-full bg-white border border-slate-200/80 text-slate-700 font-bold px-2 py-0.5 text-[11px] shadow-2xs ml-auto">{columnTasks.length}</span>
               </h2>
               {columnTasks.length === 0 && (
-                <p className="text-xs text-slate-400 border border-dashed border-slate-200 rounded-xl p-3 text-center">Nothing here</p>
+                <p className="text-xs text-slate-400 border border-dashed border-slate-200 rounded-xl p-4 text-center bg-white/40">Nothing here</p>
               )}
               {columnTasks.map((task) => (
                 <TaskCard
