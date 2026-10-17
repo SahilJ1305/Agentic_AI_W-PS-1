@@ -23,7 +23,11 @@ const GithubField = ({ pid, person, onChanged }) => {
     setBusy(true);
     try {
       await cadence.updateParticipant(pid, person.id, { github_username: value.trim().replace(/^@/, '') || null });
-      toast.success(`GitHub username saved for ${person.name}.`);
+      toast.success(
+        person.telegram_chat_id && value.trim()
+          ? `Saved. ${person.name} was told on Telegram and can tap Recheck to verify finished tasks.`
+          : `GitHub username saved for ${person.name}.`,
+      );
       await onChanged();
     } catch (err) {
       toast.error(err.message);
@@ -94,8 +98,9 @@ const InviteBlock = ({ person }) => {
   );
 };
 
-const MemberCard = ({ pid, person, onChanged }) => {
+const MemberCard = ({ pid, person, gitCheck, onChanged }) => {
   const state = telegramState(person);
+  const missingGithub = Boolean(gitCheck?.enabled) && !person.github_username;
   const skills = (person.skills || '').split(',').map((s) => s.trim()).filter(Boolean);
   const joined = Boolean(person.telegram_chat_id);
   return (
@@ -104,6 +109,7 @@ const MemberCard = ({ pid, person, onChanged }) => {
         <h3 className="font-semibold text-slate-900">{person.name}</h3>
         <Chip tone={person.role === 'lead' ? 'blue' : 'slate'}>{person.role}</Chip>
         <Chip tone={state.tone} icon={state.label === 'Paused' ? PauseCircle : state.label === 'On Telegram' ? Send : undefined}>{state.label}</Chip>
+        {missingGithub && <Chip tone="amber" icon={Github}>No GitHub username</Chip>}
         {person.paused_until && state.label === 'Paused' && (
           <span className="text-xs text-slate-400">until {new Date(person.paused_until).toLocaleString()}</span>
         )}
@@ -121,7 +127,13 @@ const MemberCard = ({ pid, person, onChanged }) => {
       )}
       <div className="mt-3">
         <GithubField key={person.github_username || ''} pid={pid} person={person} onChanged={onChanged} />
-        <p className="text-[11px] text-slate-400 mt-1">Used to check “done” claims against this person&apos;s commits.</p>
+        {missingGithub ? (
+          <p className="text-[11px] text-amber-700 mt-1">
+            Without this, {person.name}&apos;s “done” claims are accepted but stay <strong>unverified</strong>. Cadence never guesses a username.
+          </p>
+        ) : (
+          <p className="text-[11px] text-slate-400 mt-1">Used to check “done” claims against this person&apos;s commits.</p>
+        )}
       </div>
       {!joined && <InviteBlock person={person} />}
       {joined && person.deep_link && (
@@ -181,8 +193,9 @@ const AddTeammate = ({ pid, onChanged }) => {
   );
 };
 
-const Team = ({ pid, people, onChanged }) => {
+const Team = ({ pid, people, gitCheck, onChanged }) => {
   const waiting = people.filter((p) => !p.telegram_chat_id).length;
+  const noGithub = gitCheck?.enabled ? people.filter((p) => !p.github_username) : [];
   return (
     <div className="space-y-4">
       <Panel icon={Users} title={`Team (${people.length})`}>
@@ -193,13 +206,22 @@ const Team = ({ pid, people, onChanged }) => {
         </p>
       </Panel>
 
+      {noGithub.length > 0 && (
+        <div role="status" className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <strong>{noGithub.length} {noGithub.length === 1 ? 'teammate has' : 'teammates have'} no GitHub username yet</strong>
+          {' '}({noGithub.map((p) => p.name).join(', ')}). Cadence checks “done” claims against {gitCheck.repo || 'the repository'}
+          and never guesses usernames, so until you add them below their finished tasks are marked unverified. When you save one,
+          that person is told on Telegram and can tap <em>Recheck</em>.
+        </div>
+      )}
+
       {people.length === 0 ? (
         <EmptyState icon={Users} title="No teammates yet">
           Add the people on this project below. Each one gets an invite link for the Telegram bot.
         </EmptyState>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {people.map((person) => <MemberCard key={person.id} pid={pid} person={person} onChanged={onChanged} />)}
+          {people.map((person) => <MemberCard key={person.id} pid={pid} person={person} gitCheck={gitCheck} onChanged={onChanged} />)}
         </div>
       )}
 

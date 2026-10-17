@@ -42,19 +42,62 @@ a reverse proxy with HTTPS in front for real use. Back up the `cadence_data` vol
 GitHub Actions (`.github/workflows/ci.yml`) runs the tests and builds every image on each push, so
 nothing needs to be run locally to know the code is healthy.
 
-### Develop on your own machine
+### Run it on your own machine (teammates)
 
-You can run the dashboard and API without the bot: leave `TELEGRAM_BOT_TOKEN` empty.
+Everyone can run the whole project independently from a fresh clone. Your copy has its own database,
+its own logins and its own bot (or none).
+
+**The easy way: one command (needs Docker).**
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -r requirements.txt     # Windows: .venv\Scripts\...
-DB_PORT=5433 docker compose up -d db backend      # login service (use DB_PORT if 5432 is taken)
-.venv/bin/python -m app.db.seed_demo              # optional: the FestPass demo project
-.venv/bin/python -m app.main                      # API on :8000
-cd frontend && npm install && npm run dev         # dashboard on :5173
+git clone https://github.com/SahilJ1305/Cadence.git && cd Cadence
+docker compose up --build
 ```
 
-Want to try the bot too? Create **your own** bot in @BotFather and use its token only in your `.env`.
+That starts everything: the login database and service, the Cadence API (with the bot and scheduler)
+and the dashboard, and it creates the FestPass demo project on the first start. Open
+**http://localhost:5173**, sign up with any email, and you will see the demo project. No `.env` is needed
+to start. Stop with `Ctrl+C` (or `docker compose down`). After pulling new code, run it with `--build` again.
+
+| Address | What |
+|---|---|
+| http://localhost:5173 | The dashboard (reloads as you edit `frontend/`) |
+| http://localhost:8000/api/health | The Cadence API and bot status |
+| http://localhost:8001/docs | The login service |
+
+To use AI or a bot, create your own `.env` first with `python -m scripts.init_env` (plain Python, no
+install needed; it fills in fresh secrets) and add the values described in the table further down. `docker compose up` picks the `.env` up automatically. If your `.env` has
+`TELEGRAM_BOT_TOKEN`, the bot runs inside the `cadence` container, so never also run `python -m app.main`.
+
+**Without Docker.** You need **Python 3.11+** and **Node 20+**.
+
+```bash
+python -m venv .venv                                   # Windows: .venv\Scripts\activate
+.venv/bin/pip install -r requirements.txt              # Windows: .venv\Scripts\pip install -r requirements.txt
+.venv/bin/python -m scripts.init_env --no-docker       # your .env, with the login service on a local SQLite file
+.venv/bin/pip install -r backend/requirements.txt      # the login service's packages
+```
+
+Then start three pieces, each in its own terminal:
+
+| Piece | Command |
+|---|---|
+| Login service (:8001) | `cd backend && uvicorn main:app --port 8001` |
+| Cadence API (:8000) | `python -m app.db.seed_demo` once (demo project), then `python -m app.main` |
+| Dashboard (:5173) | `cd frontend && npm install && npm run dev` |
+
+To check your setup without starting anything: `python -m pytest -q` (49 tests, no keys or bot needed).
+
+What you can and cannot do without secrets:
+
+| You have | You get |
+|---|---|
+| Nothing extra | The dashboard, API, demo project, every test |
+| An AI key (ask the project owner through a password manager, or use your own) | The bot understands free-text replies and the planner turns a spec into tasks. Without it the bot falls back to button questions, and one-word replies like "done" still work |
+| **Your own** Telegram bot (free, from @BotFather) | The live bot on your machine. Never use the team bot's token on a laptop |
+
+The team's bot runs on the server only. Two copies sharing a token answer every message twice.
+Your `.env` is git-ignored. Never commit it, and never copy someone else's.
 
 ### Create the Telegram bot (2 minutes, a person has to do this)
 
@@ -77,6 +120,7 @@ token, never paste logs that contain it, and `/revoke` it in BotFather if it lea
 | Buttons | answer any question the bot asks; they never go through the LLM |
 | `/mytasks` `/next` `/status` | see your tasks, your next ready task, the overview |
 | `/done T3` `/blocked T3 why` `/undo` | explicit updates, still checked by the Policy Engine |
+| `/recheck` | check your finished tasks against your GitHub commits again (also a button) |
 | `/pause 3` | no reminders for 3 hours (`/pause 0` resumes) |
 | `/digest` `/risk` | post a report (the lead anywhere, anyone in the linked team group) |
 | `/linkgroup` | the lead sends this in the team group |
@@ -95,7 +139,13 @@ When someone says a task is done, Cadence looks for a commit or pull request **b
 account** that matches the task. Set `GITHUB_REPO` (and a read-only `GITHUB_TOKEN`) in `.env` and give
 each teammate a GitHub username on the Team tab. A match marks the task *verified* and keeps the commit
 as evidence. Someone else's commit, or no commit, leaves it *complete (unverified)*, asks for a link,
-and tells the lead. Try it: `python -m scripts.check_git_claim <user> T3 "task title" "what they said"`.
+and tells the lead. **Cadence never guesses a GitHub username.** If someone has none on the Team tab, the bot says so when they
+join and again when they say "done". The task is still taken as complete, but marked *unverified*, the lead is
+told once, and nothing is sent to GitHub. When the lead saves the username, that person gets a message with a
+**Recheck my tasks** button (or they can send `/recheck`), which runs the checker over everything they already
+finished. Only a logged-in user can set a username.
+
+Try it: `python -m scripts.check_git_claim <user> T3 "task title" "what they said"`.
 
 ## How it maps to the spec
 

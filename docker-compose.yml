@@ -1,17 +1,34 @@
-# Accounts stack: Postgres + accounts API + React dashboard.
-# The Cadence API itself (bot, agents, board data) runs outside Docker:
-#     .venv/bin/python -m app.main          # http://localhost:8000
-# Everything reads the repo-root .env; SECRET_KEY must be the same for both APIs.
+# Run EVERYTHING for local development with one command:
+#
+#     docker compose up --build
+#
+# then open http://localhost:5173 (dashboard), sign up, and you will see the demo project.
+#   db        Postgres for the login service           (not published on your machine)
+#   backend   login service                            http://localhost:8001
+#   cadence   Cadence API + Telegram bot + scheduler   http://localhost:8000
+#   frontend  the dashboard, with live reload          http://localhost:5173
+#
+# No .env is needed to start. If you have one (python -m scripts.init_env) it is used, and its
+# SECRET_KEY is shared by both APIs. Without one, a development-only key is used.
+#
+# TELEGRAM: if your .env has TELEGRAM_BOT_TOKEN, the bot starts INSIDE the `cadence` container. Never run
+# `python -m app.main` at the same time, and never use the team's token on a laptop: two copies on one
+# token answer every message twice. Leave the token empty to run without a bot.
+#
+# This file is for development. To run on a server use docker-compose.prod.yml.
+
+x-dev-secret: &dev-secret ${SECRET_KEY:-dev-only-secret-not-for-production-0123456789abcdef}
+
 services:
   db:
     image: postgres:16-alpine
-    container_name: cadence_db
     environment:
       POSTGRES_USER: cadence
       POSTGRES_PASSWORD: cadence
       POSTGRES_DB: cadence
-    ports:
-      - "${DB_PORT:-5432}:5432"          # set DB_PORT=5433 if something already uses 5432
+    # Only the login service talks to this database, over the compose network, so nothing is published
+    # (this also avoids clashing with a Postgres already running on your machine). To inspect it with
+    # psql from your machine, add:   ports: ["5433:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -24,35 +41,56 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: cadence_accounts
     ports:
       - "8001:8001"
     volumes:
       - ./backend:/app
     env_file:
-      - ./.env
+      - path: ./.env
+        required: false
     environment:
       # Inside Docker the database host is the "db" service, not localhost.
       DATABASE_URL: postgresql+psycopg://cadence:cadence@db:5432/cadence
+      SECRET_KEY: *dev-secret
+      FRONTEND_URL: http://localhost:5173
     depends_on:
       db:
         condition: service_healthy
+
+  cadence:
+    build:
+      context: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - cadence_data:/srv/data           # the project database (SQLite) survives restarts
+    env_file:
+      - path: ./.env
+        required: false
+    environment:
+      APP_HOST: 0.0.0.0
+      DATABASE_PATH: /srv/data/cadence.db
+      SECRET_KEY: *dev-secret
+      FRONTEND_URL: http://localhost:5173
+      SEED_DEMO_IF_EMPTY: "true"         # first start: create the FestPass demo project so there is something to see
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: cadence_frontend
     ports:
       - "5173:5173"
     volumes:
       - ./frontend:/app
       - /app/node_modules
     environment:
+      # Addresses the BROWSER uses, so they are localhost, not service names.
       VITE_AUTH_API_URL: http://localhost:8001
       VITE_CADENCE_API_URL: http://localhost:8000
     depends_on:
       - backend
+      - cadence
 
 volumes:
   pgdata:
+  cadence_data:

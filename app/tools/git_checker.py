@@ -39,7 +39,8 @@ VerificationStatus = Literal[
     "weak_match",       # work by the claimant, but not clearly this task
     "author_mismatch",  # the referenced or matching work belongs to someone else
     "not_found",        # nothing by the claimant that matches
-    "skipped",          # checker not configured, or no GitHub username on file
+    "no_username",      # the person has no GitHub username on file; we never guess one
+    "skipped",          # checker not configured
     "error",            # GitHub unreachable or returned an error
 ]
 
@@ -97,7 +98,7 @@ class GitVerification(BaseModel):
     @property
     def checked(self) -> bool:
         """True when GitHub was actually consulted and gave an answer."""
-        return self.status not in ("skipped", "error")
+        return self.status not in ("skipped", "error", "no_username")
 
 
 class GitRefs(BaseModel):
@@ -307,7 +308,7 @@ async def verify_claim(
         return GitVerification(status="skipped", reason="GITHUB_REPO is not set", **base)
     if not github_username:
         return GitVerification(
-            status="skipped", reason="no GitHub username is on file for this person", **base
+            status="no_username", reason="there is no GitHub username on file for this person", **base
         )
     username = github_username.lstrip("@")
     base["github_username"] = username

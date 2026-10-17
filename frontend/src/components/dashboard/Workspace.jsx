@@ -126,7 +126,7 @@ const Workspace = ({ projectId, project, headerProps }) => {
                 onOpenTaskByKey={openByKey}
               />
             )}
-            {tab === 'team' && <Team pid={projectId} people={people} onChanged={data.refresh} />}
+            {tab === 'team' && <Team pid={projectId} people={people} gitCheck={summary?.git_check} onChanged={data.refresh} />}
           </>
         )}
       </div>

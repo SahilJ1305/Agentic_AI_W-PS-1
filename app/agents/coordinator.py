@@ -66,6 +66,7 @@ def build_context_packet(
     task_index: list[dict],
     recent_messages: list[dict],
     message_text: str,
+    sender_role: str | None = None,
 ) -> str:
     """
     Build the context packet exactly as described in spec §10.2.
@@ -73,7 +74,7 @@ def build_context_packet(
     """
     lines: list[str] = [
         f"NOW: {now}",
-        f"SENDER: {sender_name}",
+        f"SENDER: {sender_name}" + (f" ({sender_role})" if sender_role else ""),
     ]
 
     if pending_question:
@@ -119,6 +120,7 @@ async def run_coordinator(
     recent_messages: list[dict],
     message_text: str,
     db: aiosqlite.Connection,
+    sender_role: str | None = None,
 ) -> Interpretation:
     """
     Call the Coordinator Agent and return a validated Interpretation.
@@ -147,6 +149,7 @@ async def run_coordinator(
         task_index=task_index,
         recent_messages=recent_messages,
         message_text=message_text,
+        sender_role=sender_role,
     )
 
     examples = _examples_text()

@@ -34,6 +34,7 @@ COMMANDS = [
     ("done", "Mark a task done: /done T3"),
     ("blocked", "Report a blocker: /blocked T3 reason"),
     ("undo", "Undo your last update"),
+    ("recheck", "Recheck your finished tasks against GitHub"),
     ("pause", "Pause reminders: /pause 3 (hours)"),
     ("digest", "Post the project digest"),
     ("risk", "Post the risk report"),

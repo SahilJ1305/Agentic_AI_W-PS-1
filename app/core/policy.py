@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -105,7 +106,23 @@ async def apply(
         named = next((sender_task_map[u.task_key] for u in interpretation.updates
                       if u.task_key in sender_task_map), None)
         handoff_task = named or (open_mine[0] if open_mine else None)
-        if lead and lead.get("telegram_chat_id") and lead["id"] != sender["id"]:
+        if lead and lead["id"] == sender["id"] and handoff_task:
+            # The lead is the one asking, so there is no one above her to tell.
+            from app.core.handoff import suggest_owner
+
+            pick = await suggest_owner(db, project_id, handoff_task, sender["id"])
+            decision.rule_log.append("R13: the lead asked for a handoff → suggest an owner to her directly")
+            decision.notifications.add(
+                participant_id=sender["id"],
+                template_key="HANDOFF_SELF",
+                context={
+                    "task": handoff_task,
+                    "suggested_owner": pick["name"] if pick else "nobody free",
+                    "skills": pick["skills"] if pick else "",
+                    "open_count": pick["open_count"] if pick else "",
+                },
+            )
+        elif lead and lead.get("telegram_chat_id") and lead["id"] != sender["id"]:
             from app.core.handoff import suggest_owner
 
             pick = await suggest_owner(db, project_id, handoff_task, sender["id"]) if handoff_task else None
@@ -331,8 +348,10 @@ async def _apply_update(
         ))
         return
 
-    # R10: blocked with empty blocker description
-    if update.status == "blocked" and (not update.blocker or not update.blocker.description):
+    # R10: blocked with empty blocker description (a placeholder like "unspecified issue" counts as empty)
+    if update.status == "blocked" and (
+        not update.blocker or not update.blocker.description or _is_placeholder(update.blocker.description)
+    ):
         decision.rule_log.append("R10: blocked with no blocker → ASK_BLOCKER")
         decision.notifications.add(
             participant_id=sender["id"],
@@ -429,6 +448,47 @@ async def _apply_git_check(
     Anything else (skipped, error, or a miss on a task that doesn't need evidence)
     falls through to R7 and the normal path, so a GitHub outage never blocks a reply.
     """
+    if check.status == "no_username":
+        # We never guess a GitHub username. Accept the claim, mark it unverified, and say exactly
+        # what is missing and who can fix it.
+        decision.rule_log.append(
+            f"R7c: {sender['name']} has no GitHub username on file → complete, unverified (not guessing one)"
+        )
+        lead = await repo.get_lead(db, task["project_id"])
+        is_lead = bool(lead and lead["id"] == sender["id"]) or sender.get("role") == "lead"
+        hint = (
+            "You're the lead, so you can add it yourself on the Cadence website (Team tab)."
+            if is_lead else
+            f"Ask {(lead or {}).get('name', 'your lead')} to add it on the Cadence website (Team tab)."
+        )
+        decision.notifications.add(
+            participant_id=sender["id"],
+            template_key="GIT_NO_USERNAME",
+            context={"task": task, "hint": hint},
+            static_buttons=[("Recheck my tasks", "git:recheck")],
+        )
+        if lead and lead["id"] != sender["id"]:
+            decision.notifications.add(
+                participant_id=lead["id"],
+                template_key="GIT_NO_USERNAME_LEAD",
+                context={"task": task, "reporter": sender["name"]},
+                dedupe_key=f"git_nousername:{sender['id']}",      # tell the lead once per person
+            )
+        decision.approved.append(ApprovedUpdate(
+            task_id=task["id"],
+            task_key=task["key"],
+            new_status="complete",
+            old_status=task["status"],
+            progress_note=update.progress_note,
+            completion_evidence=update.completion_evidence,
+            verified=False,
+            flags_to_add=["needs_verification"],
+            reason="Completed, not verified: no GitHub username on file",
+            rule_fired="R7c",
+            confidence=update.status_confidence,
+        ))
+        return True
+
     if check.is_verified:
         decision.rule_log.append(f"R7a: git check verified {task['key']} → {check.evidence_url}")
         decision.approved.append(ApprovedUpdate(
@@ -515,6 +575,17 @@ async def _check_dependency_conflict(task: dict, db: aiosqlite.Connection) -> di
         if upstream and upstream["status"] != "complete":
             return upstream
     return None
+
+
+_PLACEHOLDER = re.compile(
+    r"^\W*(an?\s+)?(unspecified|unknown|unclear|undisclosed|unnamed|no\s+(specific\s+)?(reason|details?))\b",
+    re.IGNORECASE,
+)
+
+
+def _is_placeholder(description: str) -> bool:
+    """True for filler the model invents when the person gave no reason ("Unspecified issue with T9")."""
+    return bool(_PLACEHOLDER.match(description or ""))
 
 
 def interpretation_reason(update: TaskUpdate) -> str:

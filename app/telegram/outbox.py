@@ -45,7 +45,7 @@ BACKOFF_S = (3, 10)        # wait before retry 2 and retry 3 (safe errors only)
 
 # Replies to something the person just said are always sent.
 # Check-ins, nudges and alerts wait out the quiet window (R16).
-_REPLY_PREFIXES = ("ACK_", "CLARIFY_", "ASK_", "CONFIRM_", "VERIFY_", "DEPENDENCY_", "NOT_", "OFF_", "CORRECTION_", "PEER_")
+_REPLY_PREFIXES = ("ACK_", "CLARIFY_", "ASK_", "CONFIRM_", "VERIFY_", "DEPENDENCY_", "NOT_", "OFF_", "CORRECTION_", "PEER_", "GIT_")
 
 
 async def run_outbox_worker(bot: Bot) -> None:
