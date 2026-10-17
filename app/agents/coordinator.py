@@ -18,7 +18,7 @@ from app.llm.gateway import LLMFailure, call_llm
 log = logging.getLogger(__name__)
 
 _PROMPTS = Path(__file__).parent / "prompts"
-_SYSTEM_PROMPT = (_PROMPTS / "coordinator_system.md").read_text()
+_SYSTEM_PROMPT = (_PROMPTS / "coordinator_system.md").read_text(encoding="utf-8")
 _FEWSHOTS = _PROMPTS / "fewshots.yaml"
 
 
@@ -26,17 +26,20 @@ def _examples_text() -> str:
     """Compact few-shots so Hinglish, multi-task, and undo examples reach the model."""
     if not _FEWSHOTS.exists():
         return ""
-    data = yaml.safe_load(_FEWSHOTS.read_text()) or {}
+    data = yaml.safe_load(_FEWSHOTS.read_text(encoding="utf-8")) or {}
     lines = ["Examples (message → what to report):"]
     for case in data.get("cases") or []:
         expected = case.get("expected") or {}
         updates = expected.get("updates") or []
         summary = expected.get("intent", "status_update")
-        if updates:
-            bits = []
-            for update in updates:
-                status = update.get("status") or "note"
-                bits.append(f"{update.get('task_key')}={status}")
+        bits = []
+        for update in updates:
+            status = update.get("status") or "note"
+            bits.append(f"{update.get('task_key')}={status}")
+        for msg in expected.get("messages") or []:
+            clears = " + clears blocker" if msg.get("resolves_blocker") else ""
+            bits.append(f"message to {msg.get('to') or msg.get('task_key')}: {msg.get('text')!r}{clears}")
+        if bits:
             summary = ", ".join(bits)
         lines.append(f"- {case.get('message')!r} → {summary}")
     return "\n".join(lines)
@@ -67,6 +70,7 @@ def build_context_packet(
     recent_messages: list[dict],
     message_text: str,
     sender_role: str | None = None,
+    team: list[dict] | None = None,
 ) -> str:
     """
     Build the context packet exactly as described in spec §10.2.
@@ -85,6 +89,15 @@ def build_context_packet(
         lines.append(f"PENDING QUESTION: {kind} for {task_key} (asked {asked_at})")
     else:
         lines.append("PENDING QUESTION: none")
+
+    if team:
+        lines.append("TEAM (people you can pass a message to):")
+        for person in team:
+            if person.get("name") == sender_name:
+                continue
+            tag = " (lead)" if person.get("role") == "lead" else ""
+            handle = f" @{person['telegram_username'].lstrip('@')}" if person.get("telegram_username") else ""
+            lines.append(f"- {person['name']}{tag}{handle}")
 
     lines.append("SENDER TASKS:")
     for t in sender_tasks:
@@ -121,6 +134,7 @@ async def run_coordinator(
     message_text: str,
     db: aiosqlite.Connection,
     sender_role: str | None = None,
+    team: list[dict] | None = None,
 ) -> Interpretation:
     """
     Call the Coordinator Agent and return a validated Interpretation.
@@ -150,6 +164,7 @@ async def run_coordinator(
         recent_messages=recent_messages,
         message_text=message_text,
         sender_role=sender_role,
+        team=team,
     )
 
     examples = _examples_text()

@@ -121,8 +121,8 @@ const OpenBlockers = ({ blockers, onOpen, onChanged }) => {
   const resolve = async (blocker) => {
     setBusy(blocker.id);
     try {
-      await cadence.resolveBlocker(blocker.id, 'Resolved from the dashboard');
-      toast.success(`Blocker on ${blocker.task_key} resolved.`);
+      const res = await cadence.resolveBlocker(blocker.id, 'Resolved from the dashboard');
+      toast.success(`Blocker on ${blocker.task_key} resolved.${res?.owner_notified ? ' The owner was told on Telegram.' : ''}`);
       await onChanged();
     } catch (err) {
       toast.error(err.message);

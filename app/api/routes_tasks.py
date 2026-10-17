@@ -16,6 +16,7 @@ from app.config import settings
 from app.db import repo
 from app.core.dependency_engine import recompute_all_readiness, compute_critical_path
 from app.core.taskview import load_view
+from app.core.unblock import clear_blockers
 
 router = APIRouter(tags=["tasks"])
 log = logging.getLogger(__name__)
@@ -123,6 +124,15 @@ async def patch_task(tid: int, req: PatchTaskRequest, user: CurrentUser = Depend
             actor="lead",
             now=now,
         )
+        # Moving a blocked task on is also clearing its blocker: close the rows so the escalation
+        # ladder stops, and tell whoever was asked to help. The owner gets OVERRIDE_NOTICE below.
+        if task["status"] == "blocked" and req.status and req.status != "blocked":
+            lead = await repo.get_lead(db, task["project_id"])
+            cleared = await clear_blockers(
+                db, task, by=lead, note=req.reason, now=now, set_in_progress=False, notify_owner=False,
+            )
+            await cleared.batch.flush(db, now=now)
+
         owner_id = req.owner_id or task.get("owner_id")
         if owner_id:
             from app.core.notifications import NotificationBatch
@@ -255,28 +265,41 @@ async def list_blockers(pid: int, status: str = "open", user: CurrentUser = Depe
     return result
 
 
+_DEFAULT_RESOLVE_NOTE = "Resolved from the dashboard"
+
+
 @router.post("/blockers/{bid}/resolve")
 async def resolve_blocker(bid: int, body: dict, user: CurrentUser = Depends(current_user)):
+    """Resolve a blocker from the dashboard. The owner is told on Telegram and the task moves on."""
     now = _now()
+    reason = (body.get("reason") or "").strip()
+    note = "" if reason == _DEFAULT_RESOLVE_NOTE else reason          # the button's default text is not a message
     async with repo.db_context() as db:
         blocker = await repo.get_blocker(db, bid)
         if not blocker:
             raise HTTPException(404, "Blocker not found")
         task = await visible_task(db, blocker["task_id"], user)
-        await repo.resolve_blocker(db, bid, resolved_message_id=None, resolved_at=now)
-        await repo.append_task_event(
-            db,
-            task_id=blocker["task_id"],
-            event_type="blocker_resolved",
-            old_value=blocker["description"],
-            reason=body.get("reason", f"Resolved from the dashboard by {user.email}"),
-            actor="lead",
-            now=now,
+        if blocker["status"] == "resolved":
+            return {"status": "resolved"}
+        lead = await repo.get_lead(db, task["project_id"]) or {"name": "The lead"}
+        cleared = await clear_blockers(
+            db, task, by=lead, note=note, now=now, only_blocker_id=bid,
+            source_msg_id=None,
         )
+        if cleared.cleared:
+            await cleared.batch.flush(db, now=now)
+        fresh = await repo.get_task(db, task["id"])
     await broadcaster.publish("blocker.resolved", {
         "project_id": task["project_id"], "blocker_id": bid, "task_key": task["key"],
+        "reason": reason or "Resolved from the dashboard",
     })
-    return {"status": "resolved"}
+    if cleared.new_status:
+        await broadcaster.publish("task.updated", {
+            "project_id": task["project_id"], "task_key": task["key"], "status": (fresh or task)["status"],
+            "readiness": (fresh or task)["readiness"], "changed_fields": ["status"],
+            "reason": reason or "Blocker resolved from the dashboard", "rule_fired": "lead override",
+        })
+    return {"status": "resolved", "task_status": (fresh or task)["status"], "owner_notified": bool(cleared.batch._messages)}
 
 
 @router.get("/projects/{pid}/events")

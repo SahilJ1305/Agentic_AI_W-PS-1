@@ -106,6 +106,8 @@ Your `.env` is git-ignored. Never commit it, and never copy someone else's.
    command menu and description, removes any webhook, and tells you if another program already polls it.
 3. Each teammate opens their invite link from the **Team** tab (`https://t.me/<bot>?start=<code>`).
 4. Optional: add the bot to your team group, and the lead sends `/linkgroup` there for the daily digest.
+   For the bot to see `@mentions` in that group, turn off its privacy mode: @BotFather → `/setprivacy` → your bot → **Disable**,
+   then remove and re-add the bot to the group. (Without it, Telegram only shows the bot commands.)
 
 **One token, one running copy.** If two copies poll the same token, Telegram answers both with
 `409 Conflict`; messages are answered twice, or by a copy whose database has different data. This is
@@ -124,6 +126,8 @@ token, never paste logs that contain it, and `/revoke` it in BotFather if it lea
 | `/pause 3` | no reminders for 3 hours (`/pause 0` resumes) |
 | `/digest` `/risk` | post a report (the lead anywhere, anyone in the linked team group) |
 | `/linkgroup` | the lead sends this in the team group |
+| Messages to people | "tell the lead the API key is missing", "@Rohan can you share the keys?", "Rohan ko bolo ki PR merge kar de"; the bot passes them on, and the person can answer with "tell Priya ...". A call-out in the linked team group is also sent to that person privately |
+| Lead clears a blocker | "unblock Kabir, use the shared key" (or the **Resolve** button on the website): the owner is told and the task moves to In progress |
 
 ## What the website shows (updates in well under a second)
 

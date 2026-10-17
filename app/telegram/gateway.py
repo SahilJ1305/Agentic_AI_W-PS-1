@@ -33,6 +33,7 @@ from telegram.request import HTTPXRequest
 from app.config import settings
 from app.db import repo
 from app.core.notifications import buttons_for
+from app.core.relay import _people, mentioned_people, parse_directed, resolve_target
 from app.telegram.keyboards import parse_callback
 from app.telegram.router import _revert_latest, apply_explicit_status, handle_message, recheck_member
 
@@ -420,6 +421,11 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/pause 3 — no reminders for 3 hours (/pause 0 to resume)\n"
         "/digest, /risk — post a project report (lead, or in the team group)\n"
         "/linkgroup — lead only: send in the team group to receive the daily digest there\n"
+        "\n<b>Talk to your team through me:</b>\n"
+        "tell the lead the API key is missing\n"
+        "@Rohan can you share the keys?\n"
+        "Rohan ko bolo ki PR merge kar de\n"
+        "Lead only: <i>unblock Kabir, use the shared key</i> clears Kabir's blocker and tells them.\n"
         "\nOr just reply in plain English — I'll understand."
     )
     await update.message.reply_text(text, parse_mode="HTML")
@@ -662,9 +668,75 @@ async def _tell_blocked_owner(blocked, upstream, blocker, helper, template_key, 
 
 # ── Plain message ─────────────────────────────────────────────────────────────
 
+async def _group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Someone in the linked team group calls a teammate out ("@Rohan can you...", "Rohan, ..."): the
+    teammate gets it as a private message too, because nobody reads a busy group. Ordinary group
+    chatter is ignored. (Telegram only shows a bot every group message when its privacy mode is off.)
+    """
+    message, user, chat = update.message, update.effective_user, update.effective_chat
+    text = (message.text or "").strip() if message else ""
+    if not text or not user or user.is_bot:
+        return
+    from app.core.notifications import NotificationBatch
+
+    now = await _now()
+    async with repo.db_context() as db:
+        project = await repo.get_project_by_group(db, chat.id)
+        if not project:
+            return
+        participants = await repo.list_participants(db, project["id"])
+        sender = await repo.get_participant_by_chat_id(db, user.id)
+        if sender and sender["project_id"] != project["id"]:
+            sender = None
+        sender_id = sender["id"] if sender else None
+
+        targets = mentioned_people(text, participants, sender_id)
+        for entity in message.entities or []:           # people without a @username are mentioned by link
+            if entity.type == "text_mention" and entity.user:
+                hit = next((p for p in participants if p.get("telegram_chat_id") == entity.user.id), None)
+                if hit and hit["id"] != sender_id and hit not in targets:
+                    targets.append(hit)
+        if sender:
+            directed = parse_directed(text, participants, sender)
+            if directed:
+                people = _people(participants)
+                by_id = {p["id"]: p for p in participants}
+                for msg in directed.messages:
+                    kind, found = resolve_target(msg.to, people, sender_id)
+                    for person in (found or []) if kind == "people" else []:
+                        if by_id[person.id] not in targets:
+                            targets.append(by_id[person.id])
+        if not targets:
+            return
+
+        label = sender["name"] if sender else (user.full_name or "Someone")
+        role_tag = " (lead)" if sender and sender["role"] == "lead" else ""
+        batch = NotificationBatch()
+        unreachable: list[str] = []
+        for person in targets:
+            if not person.get("telegram_chat_id"):
+                unreachable.append(person["name"])
+                continue
+            batch.add(
+                participant_id=person["id"], template_key="RELAY_TO_PERSON",
+                context={"sender": label, "role_tag": role_tag, "about": " in the team group", "message": text},
+                dedupe_key=f"group-mention:{chat.id}:{message.message_id}:{person['id']}",
+            )
+        await batch.flush(db, now=now)
+
+    if unreachable:
+        names = ", ".join(unreachable)
+        await message.reply_text(
+            f"{names} hasn't started a chat with me yet, so I can't send them a private heads-up. "
+            "They need to open me and use their invite link."
+        )
+
+
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_chat.type != "private":
-        return       # group chatter is a stretch goal (S1); commands still work there
+        await _group_message(update, context)       # only acts on a call-out in the linked team group
+        return
     chat_id = update.effective_chat.id
     text = (update.message.text or "").strip()
     if not text:

@@ -22,6 +22,7 @@ from app.agents.schemas import Interpretation, TaskUpdate
 from app.config import settings
 from app.db import repo
 from app.core.notifications import NotificationBatch
+from app.core.relay import _people, resolve_target
 from app.tools.git_checker import GitVerification
 
 log = logging.getLogger(__name__)
@@ -51,8 +52,17 @@ class ApprovedUpdate:
 
 
 @dataclass
+class Resolution:
+    """The lead clearing a teammate's blocker; the router carries it out (policy never writes)."""
+    task_id: int
+    task_key: str
+    note: str = ""
+
+
+@dataclass
 class PolicyDecision:
     approved: list[ApprovedUpdate] = field(default_factory=list)
+    resolutions: list[Resolution] = field(default_factory=list)
     notifications: NotificationBatch = field(default_factory=NotificationBatch)
     clarifications: list[dict] = field(default_factory=list)  # pending questions to create
     rule_log: list[str] = field(default_factory=list)         # for the "why" panel
@@ -88,6 +98,13 @@ async def apply(
     # Load open pending question for this sender
     open_pq = await repo.get_open_question(db, sender["id"])
 
+    # Messages for other people ("tell Priya...", "@Rohan ...", the lead clearing a blocker)
+    relayed = bool(interpretation.messages)
+    if relayed:
+        await _relay_messages(interpretation, sender, project_id, db, decision)
+        if not interpretation.updates and interpretation.intent in ("message_relay", "off_topic", "question"):
+            return decision
+
     # Off-topic / question intents: no task updates, polite reply
     if interpretation.intent in ("off_topic", "question"):
         decision.rule_log.append("R0: intent=off_topic/question → OFF_TOPIC reply")
@@ -96,6 +113,9 @@ async def apply(
             template_key="OFF_TOPIC",
             context={"name": sender["name"]},
         )
+        return decision
+
+    if interpretation.intent == "message_relay" and not interpretation.updates:
         return decision
 
     # Handoff request (G3.11): tell the lead, with a suggested new owner
@@ -172,7 +192,7 @@ async def apply(
         )
 
     # If nothing was approved and nothing was clarified, send NOT_UNDERSTOOD
-    if not decision.approved and not decision.clarifications:
+    if not decision.approved and not decision.clarifications and not relayed:
         decision.rule_log.append("R15: no approved updates → NOT_UNDERSTOOD")
         if sender_tasks_list:
             decision.notifications.add(
@@ -426,6 +446,106 @@ async def _apply_update(
         confidence=update.status_confidence,
     ))
 
+
+
+# ── person-to-person messages ──────────────────────────────────────────────────
+
+async def _relay_messages(
+    interpretation: Interpretation,
+    sender: dict,
+    project_id: int,
+    db: aiosqlite.Connection,
+    decision: PolicyDecision,
+) -> None:
+    """Queue each message for its recipient and tell the sender what happened to it."""
+    participants = await repo.list_participants(db, project_id)
+    people = _people(participants)
+    by_id = {p["id"]: p for p in participants}
+    is_lead = sender.get("role") == "lead"
+    sent_to: list[str] = []
+    problems: list[str] = []
+
+    for msg in interpretation.messages:
+        text = (msg.text or "").strip()
+        task = await repo.get_task_by_key(db, project_id, msg.task_key) if msg.task_key else None
+
+        if msg.resolves_blocker:
+            targets = await blocked_tasks_for(db, project_id, msg, people, by_id, sender)
+            if is_lead and targets:
+                for t in targets:
+                    decision.resolutions.append(Resolution(task_id=t["id"], task_key=t["key"], note=text))
+                names = ", ".join(sorted({(by_id.get(t.get("owner_id")) or {}).get("name", "the owner") for t in targets}))
+                decision.rule_log.append(f"R17: lead cleared blocker on {', '.join(t['key'] for t in targets)} → tell {names}")
+                continue
+            if not is_lead:
+                decision.rule_log.append("R17: only the lead can clear a blocker; passing it on as a message")
+            elif not text:
+                problems.append(f"{msg.task_key or msg.to or 'That task'} has no open blocker to clear.")
+                continue
+
+        kind, found = resolve_target(msg.to, people, sender["id"])
+        if kind == "unknown":
+            names = ", ".join(p["name"] for p in participants if p["id"] != sender["id"])
+            problems.append(f"I don't know who “{msg.to}” is. On this project: {names}.")
+            continue
+        if kind == "ambiguous":
+            problems.append("Which one did you mean: " + " or ".join(p.name for p in found) + "?")
+            continue
+        if not text:
+            problems.append(f"What should I tell {msg.to}?")
+            continue
+        if kind == "everyone":
+            if not is_lead:
+                problems.append("Only the lead can message the whole team. Say “tell the lead ...” and I'll pass it up.")
+                continue
+            recipients = [p for p in people if p.id != sender["id"]]
+        else:
+            recipients = found
+
+        about = f" about {task['key']} · {task['title']}" if task else ""
+        for person in recipients:
+            row = by_id[person.id]
+            if not row.get("telegram_chat_id"):
+                problems.append(f"{person.name} hasn't joined me on Telegram yet, so I couldn't pass it on.")
+                continue
+            decision.notifications.add(
+                participant_id=person.id,
+                template_key="RELAY_TO_PERSON",
+                context={
+                    "sender": sender["name"],
+                    "role_tag": " (lead)" if is_lead else "",
+                    "about": about,
+                    "message": text,
+                },
+            )
+            sent_to.append(person.name)
+            decision.rule_log.append(f"R17: relayed {sender['name']} → {person.name}")
+
+    if sent_to:
+        decision.notifications.add(
+            participant_id=sender["id"],
+            template_key="RELAY_SENT",
+            context={"recipients": ", ".join(dict.fromkeys(sent_to))},
+        )
+    if problems:
+        decision.notifications.add(
+            participant_id=sender["id"],
+            template_key="RELAY_FAILED",
+            context={"summary": " ".join(problems)},
+        )
+
+
+async def blocked_tasks_for(db, project_id: int, msg, people, by_id: dict, sender: dict) -> list[dict]:
+    """Tasks with an open blocker that a 'cleared' message points at (by task key, or by owner name)."""
+    if msg.task_key:
+        candidates = [t for t in [await repo.get_task_by_key(db, project_id, msg.task_key)] if t]
+    elif msg.to:
+        kind, found = resolve_target(msg.to, people, sender["id"])
+        owners = {p.id for p in found} if kind == "people" else set()
+        candidates = [t for t in await repo.list_tasks(db, project_id) if t.get("owner_id") in owners]
+    else:
+        candidates = []
+    return [t for t in candidates if await repo.list_open_blockers_for_task(db, t["id"])]
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 

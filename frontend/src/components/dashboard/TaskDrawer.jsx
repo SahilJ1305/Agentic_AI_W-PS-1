@@ -81,8 +81,8 @@ const BlockerRow = ({ blocker, onResolved }) => {
     e.preventDefault();
     setBusy(true);
     try {
-      await cadence.resolveBlocker(blocker.id, reason.trim() || 'Resolved from the dashboard');
-      toast.success('Blocker resolved.');
+      const res = await cadence.resolveBlocker(blocker.id, reason.trim() || 'Resolved from the dashboard');
+      toast.success(`Blocker resolved.${res?.owner_notified ? ' The owner was told on Telegram.' : ''}`);
       setOpen(false);
       await onResolved();
     } catch (err) {
