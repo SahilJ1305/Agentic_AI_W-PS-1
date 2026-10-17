@@ -17,3 +17,8 @@
     background-color: rgb(219 234 254);
   }
 }
+
+/* Small global touches (look only). */
+body { -webkit-font-smoothing: antialiased; }
+::selection { background: rgb(191 219 254); }
+* { scrollbar-width: thin; scrollbar-color: rgb(203 213 225) transparent; }

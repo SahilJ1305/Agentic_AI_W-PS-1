@@ -5,6 +5,7 @@ import { cadence } from '../../api/cadence';
 import { toast } from '../../hooks/useToastStore';
 import { copyText, inputClass, secondaryButton, darkButton, timeAgo } from './helpers';
 import { Chip, EmptyState, Panel } from './ui';
+import TeamRoster from './TeamRoster';
 
 function telegramState(person) {
   if (!person.telegram_chat_id) return { label: 'Not joined', tone: 'slate' };
@@ -249,11 +250,12 @@ const AddTeammate = ({ pid, onChanged }) => {
   );
 };
 
-const Team = ({ pid, people, gitCheck, onChanged }) => {
+const Team = ({ pid, people, gitCheck, onChanged, projects = [], onSelectProject, refreshKey }) => {
   const waiting = people.filter((p) => !p.telegram_chat_id).length;
   const noGithub = gitCheck?.enabled ? people.filter((p) => !p.github_username) : [];
   return (
-    <div className="space-y-4">
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
+    <div className="min-w-0 space-y-4">
       <Panel icon={Users} title={`Team (${people.length})`}>
         <p className="text-sm text-slate-500">
           Each teammate opens their personal invite link (or scans the QR code) and taps <strong>Start</strong> in Telegram.
@@ -283,6 +285,20 @@ const Team = ({ pid, people, gitCheck, onChanged }) => {
       )}
 
       <AddTeammate pid={pid} onChanged={onChanged} />
+    </div>
+
+    {projects.length > 0 && (
+      <div className="xl:sticky xl:top-40">
+        <TeamRoster
+          projects={projects}
+          currentProjectId={pid}
+          livePeople={people}
+          onSelectProject={onSelectProject}
+          onChangedCurrent={onChanged}
+          refreshKey={refreshKey}
+        />
+      </div>
+    )}
     </div>
   );
 };
