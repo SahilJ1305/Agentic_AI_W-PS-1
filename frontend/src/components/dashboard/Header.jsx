@@ -115,7 +115,7 @@ const Header = ({
               className="border border-slate-300 rounded-xl px-3 py-2 text-sm bg-white max-w-[14rem] sm:max-w-xs"
             >
               {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}{p.owner_user_id ? '' : ' (shared demo)'}</option>
+                <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
           )}
@@ -142,7 +142,7 @@ const Header = ({
             <div className="flex-1 min-w-[12rem]">
               <div className="flex justify-between text-xs text-slate-500 mb-1">
                 <span>{project?.name}</span>
-                <span className="font-semibold text-slate-700">{complete} of {total} tasks complete</span>
+                <span className="font-semibold text-slate-700">{complete} of {total} tasks complete{total ? ` · ${pct}%` : ''}</span>
               </div>
               <div
                 className="h-2 rounded-full bg-slate-100 overflow-hidden"

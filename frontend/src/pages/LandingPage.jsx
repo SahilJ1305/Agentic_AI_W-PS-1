@@ -4,7 +4,7 @@ import { ArrowRight, ShieldCheck, Zap, Sparkles, LayoutDashboard } from 'lucide-
 
 const LandingPage = () => {
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800">
+    <div className="min-h-screen flex flex-col bg-gradient-to-b from-blue-50 via-slate-50 to-slate-50 text-slate-800">
       
       {/* --- Navigation Header --- */}
       <nav className="w-full max-w-7xl mx-auto flex items-center justify-between px-6 py-5">
@@ -65,7 +65,7 @@ const LandingPage = () => {
 
         {/* --- Feature Grid Preview --- */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mt-20 w-full text-left">
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
             <div className="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl flex items-center justify-center mb-4">
               <Zap className="w-5 h-5" />
             </div>
@@ -73,7 +73,7 @@ const LandingPage = () => {
             <p className="text-sm text-slate-500">One check-in per teammate covering the tasks they own.</p>
           </div>
 
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
             <div className="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl flex items-center justify-center mb-4">
               <ShieldCheck className="w-5 h-5" />
             </div>
@@ -81,7 +81,7 @@ const LandingPage = () => {
             <p className="text-sm text-slate-500">“Connected, but waiting for credentials” is recorded as a blocker.</p>
           </div>
 
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
             <div className="bg-blue-50 text-blue-600 w-10 h-10 rounded-xl flex items-center justify-center mb-4">
               <LayoutDashboard className="w-5 h-5" />
             </div>

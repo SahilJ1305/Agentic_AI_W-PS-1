@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Activity, ClipboardList, FileText, KanbanSquare, Network, Users } from 'lucide-react';
+import StatTiles from './StatTiles';
 import { useProjectData } from '../../hooks/useProjectData';
 import { TABS } from './helpers';
 import Header from './Header';
@@ -78,38 +79,35 @@ const Workspace = ({ projectId, project, headerProps }) => {
           </div>
         )}
 
-        {tab === 'board' && (
-          <p className="text-sm text-slate-500">
-            {summary?.total_tasks ?? 0} tasks · {counts.in_progress || 0} in progress · {counts.blocked || 0} blocked · {summary?.open_blockers ?? 0} open blockers
-            {summary?.risks?.length ? ` · ${summary.risks.length} at risk` : ''}
-          </p>
-        )}
+        {tab === 'board' && <StatTiles summary={summary} counts={counts} />}
 
         {data.loading ? (
           <LoadingBlock label="Loading project…" />
         ) : (
           <>
             {tab === 'board' && (
-              <Board
+              <div className="cadence-enter"><Board
                 tasks={tasks}
                 blockers={blockers}
                 flashing={data.flashing}
                 onOpen={setOpenTaskId}
                 onChanged={data.refresh}
                 onGoToPlan={() => setTab('plan')}
-              />
+              /></div>
             )}
             {tab === 'graph' && (
-              <DependencyGraph pid={projectId} graph={data.graph} onOpenTask={setOpenTaskId} onChanged={data.refresh} />
+              <div className="cadence-enter">
+                <DependencyGraph pid={projectId} graph={data.graph} onOpenTask={setOpenTaskId} onChanged={data.refresh} />
+              </div>
             )}
             {tab === 'activity' && (
-              <ActivityFeed
+              <div className="cadence-enter"><ActivityFeed
                 events={data.events}
                 messages={data.messages}
                 liveEntries={data.liveEntries}
                 interps={data.interps}
                 loading={data.loading}
-              />
+              /></div>
             )}
             {/* Always mounted so an in-flight plan and an unsaved draft survive tab switches. */}
             <div hidden={tab !== 'plan'}>
@@ -122,16 +120,16 @@ const Workspace = ({ projectId, project, headerProps }) => {
               />
             </div>
             {tab === 'reports' && (
-              <Reports
+              <div className="cadence-enter"><Reports
                 pid={projectId}
                 projectName={project?.name}
                 risks={summary?.risks || []}
                 reportTick={data.reportTick}
                 onOpenTaskByKey={openByKey}
-              />
+              /></div>
             )}
             {tab === 'team' && (
-              <Team
+              <div className="cadence-enter"><Team
                 pid={projectId}
                 people={people}
                 gitCheck={summary?.git_check}
@@ -139,7 +137,7 @@ const Workspace = ({ projectId, project, headerProps }) => {
                 projects={headerProps.projects}
                 onSelectProject={headerProps.onSelectProject}
                 refreshKey={data.dataTick}
-              />
+              /></div>
             )}
           </>
         )}

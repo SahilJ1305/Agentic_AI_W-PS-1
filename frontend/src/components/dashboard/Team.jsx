@@ -131,6 +131,9 @@ const MemberCard = ({ pid, person, gitCheck, onChanged }) => {
   return (
     <article className="bg-white border border-slate-200 rounded-2xl p-4">
       <div className="flex flex-wrap items-center gap-2">
+        <span aria-hidden="true" className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-50 text-[11px] font-bold text-blue-700">
+          {String(person.name || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('')}
+        </span>
         <h3 className="font-semibold text-slate-900">{person.name}</h3>
         <Chip tone={person.role === 'lead' ? 'blue' : 'slate'}>{person.role}</Chip>
         <Chip tone={state.tone} icon={state.label === 'Paused' ? PauseCircle : state.label === 'On Telegram' ? Send : undefined}>{state.label}</Chip>
@@ -254,7 +257,7 @@ const Team = ({ pid, people, gitCheck, onChanged, projects = [], onSelectProject
   const waiting = people.filter((p) => !p.telegram_chat_id).length;
   const noGithub = gitCheck?.enabled ? people.filter((p) => !p.github_username) : [];
   return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[22rem_minmax(0,1fr)] xl:items-start">
     <div className="min-w-0 space-y-4">
       <Panel icon={Users} title={`Team (${people.length})`}>
         <p className="text-sm text-slate-500">
@@ -288,7 +291,7 @@ const Team = ({ pid, people, gitCheck, onChanged, projects = [], onSelectProject
     </div>
 
     {projects.length > 0 && (
-      <div className="xl:sticky xl:top-40">
+      <div className="xl:order-first xl:sticky xl:top-40">
         <TeamRoster
           projects={projects}
           currentProjectId={pid}
