@@ -31,6 +31,7 @@ const HandleField = ({ pid, person, field, label, icon: Icon, onChanged }) => {
       await onChanged();
     } catch (err) {
       toast.error(err.message);
+      setValue(person[field] || '');   // the server refused it: show what is actually saved
     } finally {
       setBusy(false);
     }
@@ -133,6 +134,7 @@ const MemberCard = ({ pid, person, gitCheck, onChanged }) => {
         <Chip tone={person.role === 'lead' ? 'blue' : 'slate'}>{person.role}</Chip>
         <Chip tone={state.tone} icon={state.label === 'Paused' ? PauseCircle : state.label === 'On Telegram' ? Send : undefined}>{state.label}</Chip>
         {missingGithub && <Chip tone="amber" icon={Github}>No GitHub username</Chip>}
+        {person.username_mismatch && <Chip tone="amber" icon={AtSign}>Account mismatch</Chip>}
         {person.paused_until && state.label === 'Paused' && (
           <span className="text-xs text-slate-400">until {new Date(person.paused_until).toLocaleString()}</span>
         )}
@@ -148,6 +150,13 @@ const MemberCard = ({ pid, person, gitCheck, onChanged }) => {
           <UnlinkButton pid={pid} person={person} onChanged={onChanged} />
         </div>
       )}
+      {person.username_mismatch && (
+        <div role="alert" className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          The saved Telegram username <strong>@{person.telegram_username}</strong> does not match the account that joined
+          (<strong>@{person.joined_username}</strong>). If the wrong person joined, press <em>Unlink &amp; new link</em> and send
+          them a fresh link; otherwise correct the username to the joined account.
+        </div>
+      )}
       {skills.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {skills.map((skill) => <Chip key={skill}>{skill}</Chip>)}
@@ -158,9 +167,13 @@ const MemberCard = ({ pid, person, gitCheck, onChanged }) => {
           <HandleField key={`tg-${person.telegram_username || ''}`} pid={pid} person={person} field="telegram_username"
             label="Telegram username" icon={AtSign} onChanged={onChanged} />
           <p className="text-[11px] text-slate-400 mt-1">
-            {person.telegram_username
-              ? `Only @${person.telegram_username} can use this invite, and they can also just open the bot and tap Start.`
-              : 'Without it, whoever opens the invite link first joins as this person.'}
+            {joined && person.joined_username
+              ? `Joined as @${person.joined_username}. A saved username has to match that account; unlink first to change the person.`
+              : joined
+                ? 'The account that joined has no Telegram username, so there is nothing to compare. Unlink to change the person.'
+                : person.telegram_username
+                  ? `Only @${person.telegram_username} can use this invite, and they can also just open the bot and tap Start.`
+                  : 'Without it, whoever opens the invite link first joins as this person.'}
           </p>
         </div>
         <div>

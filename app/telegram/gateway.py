@@ -217,7 +217,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         first_join = not participant.get("telegram_chat_id")
         try:
             await repo.onboard_participant(
-                db, participant["id"], chat_id=chat_id, onboarded_at=now, joined_as=account
+                db, participant["id"], chat_id=chat_id, onboarded_at=now, joined_as=account,
+                joined_username=username or None,
             )
         except sqlite3.IntegrityError:
             current = await repo.get_participant_by_chat_id(db, chat_id)

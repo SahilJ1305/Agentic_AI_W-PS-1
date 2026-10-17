@@ -21,6 +21,7 @@ from app.agents.schemas import PlanDraft
 from app.api.auth import CurrentUser, current_user, visible_project
 from app.api.sse import broadcaster
 from app.config import settings
+from app.core import invites
 from app.core.taskview import load_view
 from app.core.dependency_engine import validate_graph, recompute_all_readiness, compute_critical_path
 from app.core.documents import (
@@ -444,6 +445,11 @@ async def update_participant(
         participant = await repo.get_participant(db, participant_id)
         if not participant or participant["project_id"] != pid:
             raise HTTPException(404, "Participant not found")
+        if telegram_sent:
+            # Decide before changing anything, so a rejected request leaves no half-saved state.
+            reason = invites.rejection_reason(participant, req.telegram_username)
+            if reason:
+                raise HTTPException(409, reason)
         changed = github_sent and username != participant.get("github_username")
         if github_sent:
             await repo.set_participant_github(db, participant_id, username)
@@ -516,6 +522,8 @@ def _with_invite(person: dict | None) -> dict | None:
     code = person.get("invite_code")
     person = dict(person)
     person["deep_link"] = f"https://t.me/{username}?start={code}" if code else None
+    person["joined_username"] = invites.joined_handle(person)
+    person["username_mismatch"] = invites.username_mismatch(person)
     return person
 
 
