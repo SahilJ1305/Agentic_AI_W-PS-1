@@ -62,6 +62,7 @@ class Settings(BaseSettings):
 
     # ---- Behaviour --------------------------------------------------
     demo_mode: bool = True
+    seed_demo_if_empty: bool = False        # first start only: create the FestPass demo project when there are no projects
     followup_cron: str = "0 10,18 * * *"
     digest_cron: str = "0 21 * * *"
 

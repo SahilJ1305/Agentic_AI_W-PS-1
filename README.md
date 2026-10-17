@@ -44,26 +44,49 @@ nothing needs to be run locally to know the code is healthy.
 
 ### Run it on your own machine (teammates)
 
-Everyone can run the whole project independently from a fresh clone. You need **Python 3.11+** and
-**Node 20+**; Docker is optional. Your copy has its own database, its own logins and its own bot (or none).
+Everyone can run the whole project independently from a fresh clone. Your copy has its own database,
+its own logins and its own bot (or none).
+
+**The easy way: one command (needs Docker).**
 
 ```bash
 git clone https://github.com/SahilJ1305/Cadence.git && cd Cadence
-python -m venv .venv                                   # Windows: .venv\Scripts\activate
-.venv/bin/pip install -r requirements.txt              # Windows: .venv\Scripts\pip install -r requirements.txt
-.venv/bin/python -m scripts.init_env                   # creates your .env with fresh secrets
+docker compose up --build
 ```
 
-Then start the three pieces (each in its own terminal):
+That starts everything: the login database and service, the Cadence API (with the bot and scheduler)
+and the dashboard, and it creates the FestPass demo project on the first start. Open
+**http://localhost:5173**, sign up with any email, and you will see the demo project. No `.env` is needed
+to start. Stop with `Ctrl+C` (or `docker compose down`). After pulling new code, run it with `--build` again.
 
-| Piece | With Docker | Without Docker |
-|---|---|---|
-| Login service (:8001) | `DB_PORT=5433 docker compose up -d db backend` (skip `DB_PORT` unless 5432 is taken) | `python -m scripts.init_env --no-docker`, then `pip install -r backend/requirements.txt` and `cd backend && uvicorn main:app --port 8001` |
-| Cadence API (:8000) | `python -m app.db.seed_demo` (optional demo project), then `python -m app.main` | same |
-| Dashboard (:5173) | `cd frontend && npm install && npm run dev` | same |
+| Address | What |
+|---|---|
+| http://localhost:5173 | The dashboard (reloads as you edit `frontend/`) |
+| http://localhost:8000/api/health | The Cadence API and bot status |
+| http://localhost:8001/docs | The login service |
 
-Open http://localhost:5173, sign up with any email, and you will see the demo project. To check your
-setup without starting anything: `python -m pytest -q` (49 tests, no keys or bot needed).
+To use AI or a bot, create your own `.env` first with `python -m scripts.init_env` (plain Python, no
+install needed; it fills in fresh secrets) and add the values described in the table further down. `docker compose up` picks the `.env` up automatically. If your `.env` has
+`TELEGRAM_BOT_TOKEN`, the bot runs inside the `cadence` container, so never also run `python -m app.main`.
+
+**Without Docker.** You need **Python 3.11+** and **Node 20+**.
+
+```bash
+python -m venv .venv                                   # Windows: .venv\Scripts\activate
+.venv/bin/pip install -r requirements.txt              # Windows: .venv\Scripts\pip install -r requirements.txt
+.venv/bin/python -m scripts.init_env --no-docker       # your .env, with the login service on a local SQLite file
+.venv/bin/pip install -r backend/requirements.txt      # the login service's packages
+```
+
+Then start three pieces, each in its own terminal:
+
+| Piece | Command |
+|---|---|
+| Login service (:8001) | `cd backend && uvicorn main:app --port 8001` |
+| Cadence API (:8000) | `python -m app.db.seed_demo` once (demo project), then `python -m app.main` |
+| Dashboard (:5173) | `cd frontend && npm install && npm run dev` |
+
+To check your setup without starting anything: `python -m pytest -q` (49 tests, no keys or bot needed).
 
 What you can and cannot do without secrets:
 

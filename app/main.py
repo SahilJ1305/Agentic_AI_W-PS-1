@@ -87,6 +87,14 @@ async def lifespan(app: FastAPI):
     )
     log_filters.install()
     await repo.init_db()
+    if settings.seed_demo_if_empty:
+        async with repo.db_context() as db:
+            has_projects = bool(await repo.list_projects(db))
+        if not has_projects:
+            from app.db.seed_demo import seed
+
+            log.info("No projects yet, so creating the FestPass demo project (SEED_DEMO_IF_EMPTY)")
+            await seed(force=False)
     if not settings.secret_key:
         log.warning("SECRET_KEY is empty. Every board request will fail until it matches the backend's.")
 
