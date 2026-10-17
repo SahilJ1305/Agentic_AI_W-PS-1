@@ -83,6 +83,7 @@ export const cadence = {
   addParticipant: (pid, person) => request(`/projects/${pid}/participants`, { method: 'POST', json: person }),
   updateParticipant: (pid, id, changes) =>
     request(`/projects/${pid}/participants/${id}`, { method: 'PATCH', json: changes }),
+  resetInvite: (pid, id) => request(`/projects/${pid}/participants/${id}/reset-invite`, { method: 'POST' }),
 
   // Tasks
   getTask: (taskId) => request(`/tasks/${taskId}`),

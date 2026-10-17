@@ -30,6 +30,11 @@ Verified work is marked verified with the commit as evidence; someone else's com
 username. With no username on file the bot flags it (on joining and on "done"), takes the task as complete but
 unverified, tells the lead once, and never guesses; once the username is added the person can `/recheck`. Commit authorship can be faked with a git email setting, so treat it as a strong hint, not proof.
 
+**Invites**: if a person's Telegram username is saved, only that account can use their invite link, and
+they can also join by opening the bot and tapping Start. Without a username the first account to open the
+link joins and the lead is told who it was; "Unlink & new link" on the Team tab undoes a wrong join.
+`DEMO_MODE=true` skips the username check.
+
 Also built: dashboard (board, drawer, graph, activity feed with the rule behind each change, plan review,
 reports, team), Telegram commands, `scripts/setup_bot.py`, Docker deployment, CI, privacy rules (personal
 commands only in a private chat, `/status` only for members).
@@ -40,8 +45,6 @@ commands only in a private chat, `/status` only for members).
 - Deploy to a server and run exactly one bot instance (compose file is ready; nothing is deployed yet).
 - Set `DEMO_MODE=false` on the deployed instance.
 - Look at the dashboard in a browser and tune the UX: it builds and its API is tested, but nobody has reviewed it visually.
-- Decide how invites should work for real teams (links currently work for the first account that opens them).
-
 **Not built**
 - Stretch goals: reading the group chat (S1), meeting slots (S2), Slack (S3), voice notes (S4), re-plan diff (S5).
 - Interpreter eval set and model comparison (spec §17.2): `evals/` is empty, so the AI's accuracy on real

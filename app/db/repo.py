@@ -75,6 +75,7 @@ _ADDED_COLUMNS = [
     ("projects", "owner_user_id", "INTEGER"),
     ("participants", "github_username", "TEXT"),
     ("outbox", "project_id", "INTEGER"),
+    ("participants", "joined_as", "TEXT"),
 ]
 
 
@@ -172,6 +173,40 @@ async def set_participant_github(
     )
 
 
+async def set_participant_telegram_username(
+    db: aiosqlite.Connection, participant_id: int, telegram_username: str | None
+) -> None:
+    await db.execute(
+        "UPDATE participants SET telegram_username = ? WHERE id = ?",
+        (telegram_username, participant_id),
+    )
+
+
+async def find_unjoined_by_telegram_username(db: aiosqlite.Connection, username: str) -> list[dict]:
+    """People not yet on Telegram whose saved username matches (case-insensitive, '@' optional)."""
+    cur = await db.execute(
+        """SELECT * FROM participants
+           WHERE telegram_chat_id IS NULL
+             AND LOWER(LTRIM(telegram_username, '@')) = LOWER(LTRIM(?, '@'))""",
+        (username,),
+    )
+    return _rows(await cur.fetchall())
+
+
+async def reset_participant_invite(db: aiosqlite.Connection, participant_id: int, *, invite_code: str) -> None:
+    """Disconnect whoever joined, issue a new link and drop messages still queued for the old chat."""
+    await db.execute(
+        """UPDATE participants
+           SET telegram_chat_id = NULL, onboarded_at = NULL, joined_as = NULL, invite_code = ?
+           WHERE id = ?""",
+        (invite_code, participant_id),
+    )
+    await db.execute(
+        "UPDATE outbox SET status = 'failed', error = 'unlinked' WHERE participant_id = ? AND status = 'queued'",
+        (participant_id,),
+    )
+
+
 async def get_participant_by_invite(db: aiosqlite.Connection, invite_code: str) -> dict | None:
     cur = await db.execute(
         "SELECT * FROM participants WHERE invite_code = ?", (invite_code,)
@@ -204,12 +239,14 @@ async def onboard_participant(
     *,
     chat_id: int,
     onboarded_at: str,
+    joined_as: str | None = None,
 ) -> None:
     await db.execute(
         """UPDATE participants
-           SET telegram_chat_id = ?, onboarded_at = ?, last_seen_at = ?
+           SET telegram_chat_id = ?, onboarded_at = ?, last_seen_at = ?,
+               joined_as = COALESCE(?, joined_as)
            WHERE id = ?""",
-        (chat_id, onboarded_at, onboarded_at, participant_id),
+        (chat_id, onboarded_at, onboarded_at, joined_as, participant_id),
     )
 
 

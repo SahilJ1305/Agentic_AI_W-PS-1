@@ -59,6 +59,8 @@ class World:
         await seed(force=True)
         async with repo.db_context() as db:
             self.project_id = (await (await db.execute("SELECT id FROM projects LIMIT 1")).fetchone())["id"]
+            for person in await repo.list_participants(db, self.project_id):
+                await repo.set_participant_telegram_username(db, person["id"], person["name"].lower())
 
         self.bot = FakeBot()
         self.app = gateway.build_application(bot=self.bot)
@@ -68,7 +70,8 @@ class World:
         self._orig_coordinator = router.run_coordinator
         router.run_coordinator = self._coordinator
 
-        self.chat = {name: Chat(self.app, self.bot, cid, name) for name, cid in PEOPLE.items()}
+        self.chat = {name: Chat(self.app, self.bot, cid, name, username=name.lower())
+                     for name, cid in PEOPLE.items()}
         token = jwt.encode({"user_id": 1, "sub": "lead@example.com"}, SECRET, algorithm="HS256")
         self.http = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=api_app), base_url="http://cadence.test",

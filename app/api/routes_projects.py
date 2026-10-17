@@ -28,6 +28,7 @@ from app.core.documents import (
     import_task_document,
     parse_task_table,
 )
+from app.core.notifications import render_template
 from app.db import repo
 from app.llm.gateway import LLMFailure
 
@@ -393,6 +394,11 @@ class CreateParticipantRequest(BaseModel):
 
 class UpdateParticipantRequest(BaseModel):
     github_username: str | None = None
+    telegram_username: str | None = None
+
+
+def _handle(value: str | None) -> str | None:
+    return (value or "").strip().lstrip("@") or None
 
 
 @router.post("/{pid}/participants")
@@ -412,8 +418,8 @@ async def add_participant(
             role=req.role,
             skills=req.skills,
             invite_code=secrets.token_urlsafe(12),
-            telegram_username=(req.telegram_username or "").lstrip("@") or None,
-            github_username=(req.github_username or "").strip().lstrip("@") or None,
+            telegram_username=_handle(req.telegram_username),
+            github_username=_handle(req.github_username),
         )
         participant = await repo.get_participant(db, participant_id)
     return _with_invite(participant)
@@ -426,15 +432,23 @@ async def update_participant(
     req: UpdateParticipantRequest,
     user: CurrentUser = Depends(current_user),
 ):
-    """Link a participant to their GitHub account for the Git claim checker (project owner only)."""
-    username = (req.github_username or "").strip().lstrip("@") or None
+    """
+    Set the GitHub account (Git claim checker) or Telegram account (invite check), project owner only.
+    Omitted fields stay as they are.
+    """
+    username = _handle(req.github_username)
+    github_sent = "github_username" in req.model_fields_set
+    telegram_sent = "telegram_username" in req.model_fields_set
     async with repo.db_context() as db:
         await visible_project(db, pid, user)
         participant = await repo.get_participant(db, participant_id)
         if not participant or participant["project_id"] != pid:
             raise HTTPException(404, "Participant not found")
-        changed = username != participant.get("github_username")
-        await repo.set_participant_github(db, participant_id, username)
+        changed = github_sent and username != participant.get("github_username")
+        if github_sent:
+            await repo.set_participant_github(db, participant_id, username)
+        if telegram_sent:
+            await repo.set_participant_telegram_username(db, participant_id, _handle(req.telegram_username))
         participant = await repo.get_participant(db, participant_id)
         if changed and username and participant.get("telegram_chat_id"):
             # Let them know, with a button to recheck what they already finished.
@@ -448,8 +462,34 @@ async def update_participant(
                 static_buttons=[("Recheck my tasks", "git:recheck")],
             )
             await batch.flush(db, now=_now())
-    if changed:
+    if changed or telegram_sent:
         await broadcaster.publish("team.changed", {"project_id": pid, "participant": participant["name"]})
+    return _with_invite(participant)
+
+
+@router.post("/{pid}/participants/{participant_id}/reset-invite")
+async def reset_invite(pid: int, participant_id: int, user: CurrentUser = Depends(current_user)):
+    """Disconnect the Telegram account that joined as this person and issue a fresh invite link."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with repo.db_context() as db:
+        project = await visible_project(db, pid, user)
+        participant = await repo.get_participant(db, participant_id)
+        if not participant or participant["project_id"] != pid:
+            raise HTTPException(404, "Participant not found")
+        old_chat = participant.get("telegram_chat_id")
+        await repo.reset_participant_invite(db, participant_id, invite_code=secrets.token_urlsafe(12))
+        if old_chat:
+            await repo.enqueue_message(
+                db,
+                participant_id=None,
+                project_id=pid,
+                chat_id=old_chat,
+                template_key="INVITE_UNLINKED",
+                text=render_template("INVITE_UNLINKED", {"project": project["name"]}),
+                now=now,
+            )
+        participant = await repo.get_participant(db, participant_id)
+    await broadcaster.publish("team.changed", {"project_id": pid, "participant": participant["name"]})
     return _with_invite(participant)
 
 
