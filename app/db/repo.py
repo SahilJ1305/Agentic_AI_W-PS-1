@@ -139,6 +139,44 @@ async def set_project_group(db: aiosqlite.Connection, project_id: int, group_cha
     await db.execute("UPDATE projects SET group_chat_id = ? WHERE id = ?", (group_chat_id, project_id))
 
 
+async def delete_project(db: aiosqlite.Connection, project_id: int) -> dict:
+    """
+    Permanently delete a project and everything that hangs off it, in foreign-key order.
+    Returns what was removed: {"tasks": n, "people": n, "messages": n, "person_ids": [...]}.
+    The caller commits (db_context does).
+    """
+    in_project_people = "SELECT id FROM participants WHERE project_id = ?"
+    in_project_tasks = "SELECT id FROM tasks WHERE project_id = ?"
+    pid = (project_id,)
+
+    person_ids = [r[0] for r in await (await db.execute(in_project_people, pid)).fetchall()]
+    counts = {
+        "tasks": (await (await db.execute("SELECT COUNT(*) FROM tasks WHERE project_id = ?", pid)).fetchone())[0],
+        "people": len(person_ids),
+        "messages": (await (await db.execute("SELECT COUNT(*) FROM messages WHERE project_id = ?", pid)).fetchone())[0],
+    }
+
+    # Rows that point at messages, tasks or people go first. Outbox rows are matched by project too:
+    # a digest posted to a group chat belongs to the project but to no person.
+    await db.execute(f"DELETE FROM outbox WHERE project_id = ? OR participant_id IN ({in_project_people})", (project_id, project_id))
+    await db.execute(f"DELETE FROM pending_questions WHERE participant_id IN ({in_project_people})", pid)
+    await db.execute(f"DELETE FROM task_events WHERE task_id IN ({in_project_tasks})", pid)
+    await db.execute(
+        f"DELETE FROM blockers WHERE task_id IN ({in_project_tasks}) OR linked_task_id IN ({in_project_tasks})",
+        (project_id, project_id),
+    )
+    await db.execute("DELETE FROM dependencies WHERE project_id = ?", pid)
+    await db.execute("DELETE FROM reports WHERE project_id = ?", pid)
+    await db.execute("DELETE FROM messages WHERE project_id = ?", pid)
+    await db.execute("DELETE FROM tasks WHERE project_id = ?", pid)
+    await db.execute("DELETE FROM milestones WHERE project_id = ?", pid)
+    await db.execute("DELETE FROM plan_drafts WHERE project_id = ?", pid)
+    await db.execute("DELETE FROM source_documents WHERE project_id = ?", pid)
+    await db.execute("DELETE FROM participants WHERE project_id = ?", pid)
+    await db.execute("DELETE FROM projects WHERE id = ?", pid)
+    return {**counts, "person_ids": person_ids}
+
+
 async def update_project_status(db: aiosqlite.Connection, project_id: int, status: str) -> None:
     await db.execute("UPDATE projects SET status = ? WHERE id = ?", (status, project_id))
 

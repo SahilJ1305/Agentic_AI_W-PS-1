@@ -58,6 +58,7 @@ export const cadence = {
   listProjects: () => request('/projects'),
   createProject: (name) => request('/projects', { method: 'POST', json: { name } }),
   getProject: (pid) => request(`/projects/${pid}`),
+  deleteProject: (pid) => request(`/projects/${pid}`, { method: 'DELETE' }),
   listTasks: (pid) => request(`/projects/${pid}/tasks`),
   listParticipants: (pid) => request(`/projects/${pid}/participants`),
   listEvents: (pid) => request(`/projects/${pid}/events`),
