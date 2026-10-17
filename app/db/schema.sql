@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS participants (
   github_username   TEXT,                          -- for the Git claim checker
   invite_code       TEXT NOT NULL UNIQUE,
   joined_as         TEXT,                          -- Telegram name of the account that joined
+  joined_username   TEXT,                          -- that account's @username (NULL if it has none)
   onboarded_at      TEXT,
   last_seen_at      TEXT,
   paused_until      TEXT                           -- /pause

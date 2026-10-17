@@ -76,6 +76,7 @@ _ADDED_COLUMNS = [
     ("participants", "github_username", "TEXT"),
     ("outbox", "project_id", "INTEGER"),
     ("participants", "joined_as", "TEXT"),
+    ("participants", "joined_username", "TEXT"),
 ]
 
 
@@ -197,7 +198,8 @@ async def reset_participant_invite(db: aiosqlite.Connection, participant_id: int
     """Disconnect whoever joined, issue a new link and drop messages still queued for the old chat."""
     await db.execute(
         """UPDATE participants
-           SET telegram_chat_id = NULL, onboarded_at = NULL, joined_as = NULL, invite_code = ?
+           SET telegram_chat_id = NULL, onboarded_at = NULL, joined_as = NULL, joined_username = NULL,
+               invite_code = ?
            WHERE id = ?""",
         (invite_code, participant_id),
     )
@@ -240,13 +242,16 @@ async def onboard_participant(
     chat_id: int,
     onboarded_at: str,
     joined_as: str | None = None,
+    joined_username: str | None = None,
 ) -> None:
     await db.execute(
         """UPDATE participants
            SET telegram_chat_id = ?, onboarded_at = ?, last_seen_at = ?,
-               joined_as = COALESCE(?, joined_as)
+               joined_as = COALESCE(?, joined_as),
+               joined_username = CASE WHEN ? IS NULL THEN joined_username ELSE ? END
            WHERE id = ?""",
-        (chat_id, onboarded_at, onboarded_at, joined_as, participant_id),
+        (chat_id, onboarded_at, onboarded_at, joined_as,
+         joined_as, (joined_username or None), participant_id),
     )
 
 
