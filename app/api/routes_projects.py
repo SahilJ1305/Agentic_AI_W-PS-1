@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -106,6 +107,11 @@ async def get_project(pid: int, user: CurrentUser = Depends(current_user)):
     }
 
 
+def _latest(docs: list[dict], kind: str) -> str | None:
+    """Newest document of a kind (documents are listed oldest first)."""
+    return next((d["content"] for d in reversed(docs) if d["kind"] == kind), None)
+
+
 @router.post("/{pid}/documents")
 async def upload_document(
     pid: int,
@@ -142,15 +148,16 @@ async def upload_document(
             uploaded_at=now,
         )
         docs = await repo.list_source_documents(db, pid)
-        spec_text = next((doc["content"] for doc in docs if doc["kind"] == "spec"), None)
-        task_text = next(
-            (doc["content"] for doc in docs if parse_task_table(doc["content"])),
-            None,
-        )
+        spec_text = _latest(docs, "spec")
+        task_docs = [doc for doc in docs if parse_task_table(doc["content"])]
+        task_text = task_docs[-1]["content"] if task_docs else None
+        # A second spec is a revision (e.g. v2 from meeting notes): keep live statuses, apply only its edits.
+        earlier = [doc for doc in task_docs[:-1] if doc["kind"] == kind] if kind == "spec" else []
+        previous_text = earlier[-1]["content"] if earlier else None
         if spec_text:
             await ensure_participants_from_spec(db, pid, spec_text)
         if task_text:
-            imported = await import_task_document(db, pid, task_text, now)
+            imported = await import_task_document(db, pid, task_text, now, previous_text=previous_text)
             await repo.update_project_status(db, pid, "active")
         elif kind == "spec":
             participants = await repo.list_participants(db, pid)
@@ -162,6 +169,46 @@ async def upload_document(
                 _run_planner_bg, pid, project["name"], content, None, roster
             )
     return {"document_id": doc_id, "kind": kind, "sha256": sha256, "imported": imported}
+
+
+@router.post("/{pid}/meeting")
+async def revise_from_meeting(
+    pid: int,
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(current_user),
+):
+    """Meeting notes JSON + the current spec → a spec v2 preview with a change list. Nothing is saved."""
+    from app.core.spec_revision import RevisionError, revise_spec
+
+    try:
+        meeting = json.loads((await file.read()).decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(400, "The meeting file must be UTF-8 JSON (the Fireflies export).")
+    async with repo.db_context() as db:
+        project = await visible_project(db, pid, user)
+        specs = [d for d in await repo.list_source_documents(db, pid) if d["kind"] == "spec"]
+        if not specs:
+            raise HTTPException(400, "Upload the project spec first; the meeting notes are applied to it.")
+        try:
+            revision, warnings = await revise_spec(
+                spec_v1=specs[-1]["content"], meeting=meeting, project_name=project["name"], now=_now(), db=db,
+            )
+        except RevisionError as e:
+            raise HTTPException(422, str(e))
+        except LLMFailure as e:
+            raise HTTPException(502, f"The model could not write v2: {e}")
+    version = len(specs) + 1
+    base = re.sub(r"(-v\d+)?\.md$", "", specs[-1]["filename"] or "spec", flags=re.IGNORECASE)
+    return {
+        "version": version,
+        "based_on": specs[-1]["filename"],
+        "filename": f"{base}-v{version}.md",
+        "spec_v1": specs[-1]["content"],
+        "spec_md": revision.spec_md,
+        "changes": [c.model_dump() for c in revision.changes],
+        "open_questions": revision.open_questions,
+        "warnings": warnings,
+    }
 
 
 @router.post("/{pid}/plan")
@@ -176,11 +223,11 @@ async def run_plan(
         docs = await repo.list_source_documents(db, pid)
         participants = await repo.list_participants(db, pid)
 
-    spec_text = next((d["content"] for d in docs if d["kind"] == "spec"), None)
+    spec_text = _latest(docs, "spec")
     if not spec_text:
         raise HTTPException(400, "No spec document uploaded yet. Upload a spec first.")
 
-    task_doc_text = next((d["content"] for d in docs if d["kind"] == "task_doc"), None)
+    task_doc_text = _latest(docs, "task_doc")
     roster = [{"name": p["name"], "role": p["role"], "skills": p.get("skills", "")} for p in participants]
 
     # Run in background

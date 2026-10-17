@@ -5,6 +5,9 @@ ONBOARD_WELCOME:
     {task_list}
     Reply in plain words any time: "done", "stuck on X", "kal tak ho jayega".
 
+LEAD_TASK_CHANGE:
+  text: "{icon} <b>{name}</b> · {task_key} {task_title}\n{old_status} → <b>{status}</b>{detail_part}"
+
 INVITE_WRONG_ACCOUNT:
   text: "Heads up: {account} tried to join as <b>{name}</b>, but {name}'s Telegram username is set to @{expected}. I didn't let them in. If the username is wrong, fix it on the Team tab."
 

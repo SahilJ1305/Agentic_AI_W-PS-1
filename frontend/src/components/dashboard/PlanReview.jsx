@@ -1,18 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ClipboardList, Sparkles, AlertTriangle, Check, X, FileQuestion, Quote } from 'lucide-react';
+import {
+  AlertTriangle, ChevronDown, ChevronUp, ClipboardList, FileQuestion, GitBranch, LayoutGrid, Network, Rocket, Sparkles,
+} from 'lucide-react';
 import { cadence } from '../../api/cadence';
 import { toast } from '../../hooks/useToastStore';
-import { inputClass, primaryButton, percent, shortDate } from './helpers';
-import { Chip, EmptyState, ErrorNote, Panel, Spinner } from './ui';
+import { primaryButton } from './helpers';
+import { EmptyState, ErrorNote, Panel, Spinner } from './ui';
+import PlanDependencies from './plan/PlanDependencies';
+import PlanGraph, { SelectionCard } from './plan/PlanGraph';
+import PlanOverview from './plan/PlanOverview';
+import PlanTasks from './plan/PlanTasks';
+import { AUTO_ACCEPT_CONFIDENCE, buildPlanModel, initialDecisions, pairKey } from './plan/planModel';
 
-const AUTO_ACCEPT_CONFIDENCE = 0.8;
 const PLAN_TIMEOUT_MS = 180_000;
 const POLL_MS = 4000;
-
-const pairKey = (dep) => `${dep.upstream}>${dep.downstream}`;
-
-const initialDecisions = (draft) =>
-  Object.fromEntries((draft?.dependencies || []).map((d) => [pairKey(d), (d.confidence ?? 1) >= AUTO_ACCEPT_CONFIDENCE]));
+const WARNINGS_SHOWN = 3;
 
 const PlanReview = ({ pid, people, planSignal, onCommitted, onGoToTeam }) => {
   const [draftId, setDraftId] = useState(null);
@@ -23,6 +25,9 @@ const PlanReview = ({ pid, people, planSignal, onCommitted, onGoToTeam }) => {
   const [decisions, setDecisions] = useState({});
   const [owners, setOwners] = useState({});
   const [committing, setCommitting] = useState(false);
+  const [selection, setSelection] = useState(null);       // { type: 'node' | 'edge', id }
+  const [allWarnings, setAllWarnings] = useState(false);
+  const graphRef = useRef(null);
   const timeout = useRef(null);
   const poll = useRef(null);
   const handledSignal = useRef(null);
@@ -40,6 +45,7 @@ const PlanReview = ({ pid, people, planSignal, onCommitted, onGoToTeam }) => {
       setPlan(result);
       setDecisions(initialDecisions(result.draft));
       setOwners({});
+      setSelection(null);
       setError(null);
       stopWaiting();
       return true;
@@ -134,6 +140,14 @@ const PlanReview = ({ pid, people, planSignal, onCommitted, onGoToTeam }) => {
   }, [plan, draft]);
   const alreadyCommitted = plan?.status && plan.status !== 'review';
   const acceptedCount = Object.values(decisions).filter(Boolean).length;
+  const model = useMemo(() => (draft ? buildPlanModel(draft, decisions, owners) : null), [draft, decisions, owners]);
+
+  const decide = useCallback((id, value) => setDecisions((prev) => ({ ...prev, [id]: value })), []);
+  const showInGraph = (next) => {
+    setSelection(next);
+    graphRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+  const acceptAll = () => setDecisions((prev) => Object.fromEntries(Object.keys(prev).map((k) => [k, true])));
 
   const header = (
     <Panel
@@ -148,7 +162,8 @@ const PlanReview = ({ pid, people, planSignal, onCommitted, onGoToTeam }) => {
     >
       <p className="text-sm text-slate-500">
         The planner reads your spec and proposes tasks, owners and dependencies. Nothing is created until you commit.
-        Dependencies the planner is at least {Math.round(AUTO_ACCEPT_CONFIDENCE * 100)}% sure about are pre-selected.
+        Dependencies the planner is at least {Math.round(AUTO_ACCEPT_CONFIDENCE * 100)}% sure about are pre-selected; the rest are
+        marked amber for you to decide.
       </p>
     </Panel>
   );
@@ -181,7 +196,7 @@ const PlanReview = ({ pid, people, planSignal, onCommitted, onGoToTeam }) => {
         </EmptyState>
       )}
 
-      {draft && (
+      {draft && model && (
         <>
           {alreadyCommitted && (
             <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5">
@@ -189,111 +204,60 @@ const PlanReview = ({ pid, people, planSignal, onCommitted, onGoToTeam }) => {
             </p>
           )}
 
-          {draft.summary && <p className="text-sm text-slate-600 px-1">{draft.summary}</p>}
+          <PlanOverview model={model} summary={draft.summary} />
 
           {warnings.length > 0 && (
-            <Panel icon={AlertTriangle} title={`Validation warnings (${warnings.length})`} className="!border-amber-200 !bg-amber-50/50">
+            <Panel icon={AlertTriangle} title={`Things to check (${warnings.length})`} className="!border-amber-200 !bg-amber-50/50">
               <ul className="list-disc pl-5 text-sm text-amber-900 space-y-1">
-                {warnings.map((w, i) => <li key={i}>{w}</li>)}
+                {(allWarnings ? warnings : warnings.slice(0, WARNINGS_SHOWN)).map((w, i) => <li key={i}>{w}</li>)}
               </ul>
+              {warnings.length > WARNINGS_SHOWN && (
+                <button type="button" onClick={() => setAllWarnings((v) => !v)} className="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-amber-800 hover:underline">
+                  {allWarnings ? <><ChevronUp className="h-4 w-4" /> Show fewer</> : <><ChevronDown className="h-4 w-4" /> Show all {warnings.length}</>}
+                </button>
+              )}
             </Panel>
           )}
 
-          <Panel title={`Tasks (${draft.tasks.length})`}>
-            {people.length === 0 && (
-              <p className="text-xs text-amber-700 mb-2">
-                No teammates yet, so owners cannot be changed. <button type="button" className="underline" onClick={onGoToTeam}>Add teammates</button>.
-              </p>
-            )}
-            <ul className="divide-y divide-slate-100">
-              {draft.tasks.map((task) => {
-                const current = owners[task.key] ?? task.owner_name ?? '';
-                const nameKnown = !current || people.some((p) => p.name === current);
-                return (
-                  <li key={task.key} className="py-3 grid grid-cols-1 md:grid-cols-[1fr_220px] gap-2">
-                    <div className="min-w-0">
-                      <div className="text-sm">
-                        <span className="font-semibold text-slate-900">{task.key}</span>{' '}
-                        <span className="text-slate-800">{task.title}</span>
-                      </div>
-                      {task.description && <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{task.description}</p>}
-                      <div className="mt-1 flex flex-wrap gap-1.5">
-                        {task.deadline && <Chip tone="slate">due {shortDate(task.deadline)}</Chip>}
-                        {task.estimate_hours != null && <Chip tone="slate">{task.estimate_hours}h</Chip>}
-                        {task.requires_evidence && <Chip tone="amber">needs evidence</Chip>}
-                        {task.owner_name && percent(task.owner_confidence) && task.owner_confidence < 1 && (
-                          <Chip tone="slate" title="How sure the planner is about the owner">owner {percent(task.owner_confidence)}</Chip>
-                        )}
-                      </div>
-                    </div>
-                    <select
-                      value={current}
-                      onChange={(e) => setOwners((prev) => ({ ...prev, [task.key]: e.target.value }))}
-                      className={inputClass}
-                      aria-label={`Owner of ${task.key}`}
-                    >
-                      <option value="">Unassigned</option>
-                      {!nameKnown && <option value={current}>{current} (not on the team)</option>}
-                      {people.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
-                    </select>
-                  </li>
-                );
-              })}
-            </ul>
+          <Panel icon={Network} title="Dependency map">
+            <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_19rem]">
+              <PlanGraph ref={graphRef} model={model} selection={selection} onSelect={setSelection} onDecide={decide} />
+              <aside aria-label="Selection details" className="rounded-xl border border-slate-100 bg-slate-50/60 p-4 2xl:self-start">
+                <SelectionCard model={model} selection={selection} onSelect={setSelection} onDecide={decide} owners={owners} />
+              </aside>
+            </div>
           </Panel>
 
-          <Panel title={`Dependencies (${acceptedCount} of ${(draft.dependencies || []).length} accepted)`}>
-            {(draft.dependencies || []).length === 0 ? (
-              <p className="text-sm text-slate-400">The planner found no dependencies between tasks.</p>
-            ) : (
-              <ul className="divide-y divide-slate-100">
-                {draft.dependencies.map((dep) => {
-                  const key = pairKey(dep);
-                  const accepted = Boolean(decisions[key]);
-                  return (
-                    <li key={key} className={`py-3 flex gap-3 ${accepted ? '' : 'opacity-60'}`}>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex flex-wrap items-center gap-2 text-sm">
-                          <span className="font-semibold text-slate-900">{dep.upstream} → {dep.downstream}</span>
-                          <Chip tone={dep.type === 'hard' ? 'blue' : 'slate'}>{dep.type}</Chip>
-                          <Chip tone={(dep.confidence ?? 1) >= AUTO_ACCEPT_CONFIDENCE ? 'green' : 'amber'}>{percent(dep.confidence ?? 1)}</Chip>
-                          {dep.rule && <Chip tone="violet" title="Rule that proposed this edge">{dep.rule}</Chip>}
-                        </div>
-                        {dep.reason && <p className="text-sm text-slate-600 mt-1">{dep.reason}</p>}
-                        {dep.evidence_quote && (
-                          <p className="text-xs italic text-slate-500 mt-1 flex gap-1">
-                            <Quote className="w-3 h-3 mt-0.5 shrink-0" /> {dep.evidence_quote}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex gap-1 shrink-0 self-start" role="group" aria-label={`Decision for ${key}`}>
-                        <button
-                          type="button"
-                          aria-pressed={accepted}
-                          onClick={() => setDecisions((prev) => ({ ...prev, [key]: true }))}
-                          className={`p-2 rounded-lg border ${accepted ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-300 text-slate-500 hover:bg-slate-50'}`}
-                          title="Accept"
-                        >
-                          <Check className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-pressed={!accepted}
-                          onClick={() => setDecisions((prev) => ({ ...prev, [key]: false }))}
-                          className={`p-2 rounded-lg border ${!accepted ? 'bg-red-600 border-red-600 text-white' : 'border-slate-300 text-slate-500 hover:bg-slate-50'}`}
-                          title="Reject"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+          <Panel icon={LayoutGrid} title={`Tasks (${model.tasks.length}), in the order work can start`}>
+            <PlanTasks
+              model={model}
+              people={people}
+              owners={owners}
+              setOwners={setOwners}
+              selection={selection}
+              onFocus={(key) => showInGraph({ type: 'node', id: key })}
+              onGoToTeam={onGoToTeam}
+            />
           </Panel>
 
-          <div className="flex justify-end">
+          <Panel icon={GitBranch} title={`Dependencies (${acceptedCount} of ${(draft.dependencies || []).length} accepted)`}>
+            <PlanDependencies
+              model={model}
+              selection={selection}
+              onDecide={decide}
+              onFocusEdge={(id) => showInGraph({ type: 'edge', id })}
+              onAcceptAll={acceptAll}
+            />
+          </Panel>
+
+          <div className="plan-commit-bar sticky bottom-3 z-20 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur">
+            <p className="text-sm text-slate-600">
+              <Rocket className="mr-1.5 inline h-4 w-4 text-blue-600" />
+              <strong className="text-slate-900">{draft.tasks.length}</strong> tasks ·{' '}
+              <strong className="text-slate-900">{acceptedCount}</strong> dependencies accepted
+              {model.totals.rejected > 0 && <> · <strong className="text-red-700">{model.totals.rejected}</strong> rejected</>}
+              {model.totals.unassigned > 0 && <> · <strong className="text-amber-700">{model.totals.unassigned}</strong> unassigned</>}
+            </p>
             <button type="button" onClick={commit} disabled={committing || alreadyCommitted} className={primaryButton}>
               {committing ? 'Committing…' : `Commit plan (${draft.tasks.length} tasks, ${acceptedCount} dependencies)`}
             </button>

@@ -8,6 +8,7 @@ import Board from './Board';
 import DependencyGraph from './DependencyGraph';
 import ActivityFeed from './ActivityFeed';
 import PlanReview from './PlanReview';
+import MeetingUpdate from './MeetingUpdate';
 import Reports from './Reports';
 import Team from './Team';
 import TaskDrawer from './TaskDrawer';
@@ -110,7 +111,8 @@ const Workspace = ({ projectId, project, headerProps }) => {
               /></div>
             )}
             {/* Always mounted so an in-flight plan and an unsaved draft survive tab switches. */}
-            <div hidden={tab !== 'plan'}>
+            <div hidden={tab !== 'plan'} className="space-y-4">
+              <MeetingUpdate pid={projectId} onApplied={data.refresh} />
               <PlanReview
                 pid={projectId}
                 people={people}

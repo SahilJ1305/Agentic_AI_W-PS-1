@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     seed_demo_if_empty: bool = False        # first start only: create the FestPass demo project when there are no projects
     followup_cron: str = "0 10,18 * * *"
     digest_cron: str = "0 21 * * *"
+    lead_summary_every_h: float = 2.0       # default for /update_every; 0 turns the lead's regular summary off
 
     nudge_after_min: int = 120
     blocker_escalate_min: int = 180
