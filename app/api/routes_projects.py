@@ -63,6 +63,30 @@ async def create_project(req: CreateProjectRequest, user: CurrentUser = Depends(
     return project
 
 
+@router.delete("/{pid}")
+async def delete_project(pid: int, user: CurrentUser = Depends(current_user)):
+    """
+    Permanently delete one of your projects: its tasks, plan, history, messages and invite links.
+    The shared sample project (no owner) cannot be deleted from here.
+    """
+    async with repo.db_context() as db:
+        project = await visible_project(db, pid, user)
+        if project.get("owner_user_id") is None:
+            raise HTTPException(403, "The shared sample project can't be deleted.")
+        removed = await repo.delete_project(db, pid)
+
+    # Forget anything still waiting in memory for those people (their ids can be reused later).
+    from app.telegram import router as telegram_router
+
+    for person_id in removed.pop("person_ids"):
+        telegram_router._debounce_buffers.pop(person_id, None)
+        task = telegram_router._debounce_tasks.pop(person_id, None)
+        if task and not task.done():
+            task.cancel()
+    await broadcaster.publish("project.deleted", {"project_id": pid, "name": project["name"]})
+    return {"status": "deleted", "name": project["name"], "removed": removed}
+
+
 @router.get("/{pid}")
 async def get_project(pid: int, user: CurrentUser = Depends(current_user)):
     async with repo.db_context() as db:

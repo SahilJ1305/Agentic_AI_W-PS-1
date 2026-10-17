@@ -270,35 +270,8 @@ async def seed(force: bool = False) -> None:
 
 
 async def _wipe_project(db: aiosqlite.Connection, project_id: int) -> None:
-    """Delete a project in foreign-key order. outbox has no project_id column."""
-    task_rows = await (await db.execute(
-        "SELECT id FROM tasks WHERE project_id = ?", (project_id,)
-    )).fetchall()
-    person_rows = await (await db.execute(
-        "SELECT id FROM participants WHERE project_id = ?", (project_id,)
-    )).fetchall()
-    task_ids = [row["id"] for row in task_rows]
-    person_ids = [row["id"] for row in person_rows]
-
-    async def delete_in(sql: str, ids: list[int]) -> None:
-        if not ids:
-            return
-        marks = ",".join("?" * len(ids))
-        await db.execute(f"{sql} ({marks})", ids)
-
-    await delete_in("DELETE FROM outbox WHERE participant_id IN", person_ids)
-    await delete_in("DELETE FROM pending_questions WHERE participant_id IN", person_ids)
-    await delete_in("DELETE FROM task_events WHERE task_id IN", task_ids)
-    await delete_in("DELETE FROM blockers WHERE task_id IN", task_ids)
-    await db.execute("DELETE FROM dependencies WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM reports WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM messages WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM tasks WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM milestones WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM plan_drafts WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM source_documents WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM participants WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+    """Delete a project and everything in it (shared with the dashboard's delete)."""
+    await repo.delete_project(db, project_id)
 
 
 async def _store_demo_documents(db: aiosqlite.Connection, project_id: int, now: str) -> None:

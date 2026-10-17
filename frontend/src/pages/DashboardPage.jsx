@@ -6,6 +6,7 @@ import Header from '../components/dashboard/Header';
 import Workspace from '../components/dashboard/Workspace';
 import Onboarding from '../components/dashboard/Onboarding';
 import NewProjectCard from '../components/dashboard/NewProjectCard';
+import ManageProjects from '../components/dashboard/ManageProjects';
 import { ErrorNote, LoadingBlock, ToastHost } from '../components/dashboard/ui';
 import { secondaryButton } from '../components/dashboard/helpers';
 
@@ -18,6 +19,7 @@ const DashboardPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showNew, setShowNew] = useState(false);
+  const [showManage, setShowManage] = useState(false);
 
   const displayName = user?.full_name || user?.email?.split('@')[0] || 'there';
 
@@ -52,6 +54,7 @@ const DashboardPage = () => {
     projectId,
     onSelectProject: setProjectId,
     onNewProject: () => setShowNew(true),
+    onManageProjects: () => setShowManage(true),
   };
 
   const created = async (pid) => {
@@ -98,6 +101,15 @@ const DashboardPage = () => {
             <NewProjectCard onCreated={created} />
           </div>
         </div>
+      )}
+
+      {showManage && (
+        <ManageProjects
+          projects={projects}
+          currentProjectId={projectId}
+          onClose={() => setShowManage(false)}
+          onDeleted={() => loadProjects()}
+        />
       )}
 
       <ToastHost />

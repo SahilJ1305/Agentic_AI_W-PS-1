@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { LogOut, Send, Radio, Bot, FileDown, Newspaper, Plus, Activity } from 'lucide-react';
+import { LogOut, Send, Radio, Bot, FileDown, Newspaper, Plus, Activity, Settings2 } from 'lucide-react';
 import { cadence } from '../../api/cadence';
 import { toast } from '../../hooks/useToastStore';
 import { downloadText, primaryButton, secondaryButton, slug } from './helpers';
@@ -54,7 +54,7 @@ const BotChip = () => {
 };
 
 const Header = ({
-  displayName, onLogout, projects, projectId, onSelectProject, onNewProject,
+  displayName, onLogout, projects, projectId, onSelectProject, onNewProject, onManageProjects,
   live, summary, onOpenReports, onRefresh,
 }) => {
   const [busy, setBusy] = useState(null);
@@ -122,6 +122,11 @@ const Header = ({
           <button type="button" onClick={onNewProject} className={`${secondaryButton} !px-3`}>
             <Plus className="w-4 h-4" /> <span className="hidden sm:inline">New project</span>
           </button>
+          {projects.length > 0 && (
+            <button type="button" onClick={onManageProjects} className={`${secondaryButton} !px-3`} title="Manage or delete projects" aria-label="Manage projects">
+              <Settings2 className="w-4 h-4" /> <span className="hidden md:inline">Manage</span>
+            </button>
+          )}
 
           {projectId && (
             <span
