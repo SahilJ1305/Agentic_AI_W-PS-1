@@ -214,3 +214,8 @@ __marimo__/
 # Local login database when running without Docker (python -m scripts.init_env --no-docker)
 backend/*.db
 accounts.db
+
+# Database dumps and archives are data, not code (a 110 MB tar blocked a push once).
+*.tar
+*.tar.gz
+*.dump
