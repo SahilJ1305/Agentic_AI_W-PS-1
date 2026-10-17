@@ -312,7 +312,7 @@ async def save_source_document(
 
 async def list_source_documents(db: aiosqlite.Connection, project_id: int) -> list[dict]:
     cur = await db.execute(
-        "SELECT * FROM source_documents WHERE project_id = ?", (project_id,)
+        "SELECT * FROM source_documents WHERE project_id = ? ORDER BY id", (project_id,)
     )
     return _rows(await cur.fetchall())
 
@@ -392,6 +392,18 @@ async def list_tasks_for_owner(db: aiosqlite.Connection, owner_id: int) -> list[
         "SELECT * FROM tasks WHERE owner_id = ? ORDER BY key", (owner_id,)
     )
     return _rows(await cur.fetchall())
+
+
+async def update_task_details(db: aiosqlite.Connection, task_id: int, *, updated_at: str, **fields) -> None:
+    """Change title, description, owner_id or deadline without touching status."""
+    allowed = {k: v for k, v in fields.items() if k in ("title", "description", "owner_id", "deadline")}
+    if not allowed:
+        return
+    sets = ", ".join(f"{k} = ?" for k in allowed)
+    await db.execute(
+        f"UPDATE tasks SET {sets}, updated_at = ?, version = version + 1 WHERE id = ?",
+        (*allowed.values(), updated_at, task_id),
+    )
 
 
 async def update_task_status(
