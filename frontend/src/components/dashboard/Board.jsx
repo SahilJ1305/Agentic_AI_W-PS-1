@@ -37,7 +37,7 @@ export const TaskCard = ({ task, accent, flashing, onOpen }) => {
 
   return (
     <article
-      className={`bg-white border border-slate-200 border-l-4 ${accent} rounded-xl mb-2 transition-shadow hover:shadow-md ${flashing ? 'cadence-flash' : ''}`}
+      className={`bg-white border border-slate-200 border-l-4 ${accent} rounded-xl mb-2 shadow-sm transition-shadow hover:shadow-md ${flashing ? 'cadence-flash' : ''}`}
     >
       <button type="button" onClick={() => onOpen(task.id)} className="block w-full text-left p-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-300">
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
@@ -45,7 +45,7 @@ export const TaskCard = ({ task, accent, flashing, onOpen }) => {
           <span className="text-slate-300">·</span>
           <span className={`truncate ${task.owner_name ? '' : 'text-slate-400 font-medium'}`}>{task.owner_name || 'Unassigned'}</span>
           <span className="ml-auto flex items-center gap-1.5 shrink-0">
-            {task.on_critical_path && (
+            {Boolean(task.on_critical_path) && (
               <span title="On the critical path" className="text-rose-600"><Flag className="w-3.5 h-3.5" /></span>
             )}
             <RiskDot risk={task.risk} />
@@ -121,8 +121,8 @@ const OpenBlockers = ({ blockers, onOpen, onChanged }) => {
   const resolve = async (blocker) => {
     setBusy(blocker.id);
     try {
-      await cadence.resolveBlocker(blocker.id, 'Resolved from the dashboard');
-      toast.success(`Blocker on ${blocker.task_key} resolved.`);
+      const res = await cadence.resolveBlocker(blocker.id, 'Resolved from the dashboard');
+      toast.success(`Blocker on ${blocker.task_key} resolved.${res?.owner_notified ? ' The owner was told on Telegram.' : ''}`);
       await onChanged();
     } catch (err) {
       toast.error(err.message);
@@ -178,8 +178,9 @@ const Board = ({ tasks, blockers, flashing, onOpen, onChanged, onGoToPlan }) => 
         {STATUSES.map((column) => {
           const columnTasks = tasks.filter((t) => t.status === column.status);
           return (
-            <div key={column.status} className="min-w-0">
+            <div key={column.status} className="min-w-0 rounded-2xl bg-slate-100/60 p-2.5">
               <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: column.stroke }} aria-hidden="true" />
                 {column.label}
                 <span className="rounded-full bg-slate-200 text-slate-600 px-1.5 text-[11px]">{columnTasks.length}</span>
               </h2>

@@ -305,3 +305,90 @@ cases:
       updates:
         - task_key: T3
           status: blocked  # or in_progress; NOT complete
+
+  - id: 21
+    description: "Member tells the lead something"
+    sender_tasks:
+      - key: T3
+        title: Connect the payment API
+        status: in_progress
+    message: "tell the lead the gateway is down, I need an extension"
+    expected:
+      intent: message_relay
+      updates: []
+      messages:
+        - to: lead
+          text: "the gateway is down, I need an extension"
+
+  - id: 22
+    description: "@mention of a teammate"
+    sender_tasks:
+      - key: T4
+        title: Build checkout UI
+        status: in_progress
+    message: "@Rohan can you share the sandbox keys?"
+    expected:
+      intent: message_relay
+      updates: []
+      messages:
+        - to: Rohan
+          text: "can you share the sandbox keys?"
+
+  - id: 23
+    description: "Status update plus a message in one line"
+    sender_tasks:
+      - key: T6
+        title: Prepare pitch slides
+        status: in_progress
+    message: "slides final, Meera please review before 6"
+    expected:
+      intent: status_update
+      updates:
+        - task_key: T6
+          status: complete
+      messages:
+        - to: Meera
+          text: "please review the slides before 6"
+
+  - id: 24
+    description: "Hinglish message to a teammate"
+    sender_tasks:
+      - key: T4
+        title: Build checkout UI
+        status: in_progress
+    message: "Kabir ko bolo ki API ka PR merge kar de"
+    expected:
+      intent: message_relay
+      updates: []
+      messages:
+        - to: Kabir
+          text: "API ka PR merge kar de"
+
+  - id: 25
+    description: "Lead clears a teammate's blocker"
+    sender_role: lead
+    sender_tasks: []
+    message: "Omar is unblocked, use the shared key from the drive"
+    expected:
+      intent: message_relay
+      updates: []
+      messages:
+        - to: Omar
+          text: "use the shared key from the drive"
+          resolves_blocker: true
+
+  - id: 26
+    description: "Reply to a relayed message"
+    sender_tasks:
+      - key: T3
+        title: Connect the payment API
+        status: in_progress
+    recent: "bot: 💬 Priya (lead) says: send me the API key"
+    message: "sent it just now"
+    expected:
+      intent: message_relay
+      updates: []
+      messages:
+        - to: Priya
+          text: "sent it just now"
+

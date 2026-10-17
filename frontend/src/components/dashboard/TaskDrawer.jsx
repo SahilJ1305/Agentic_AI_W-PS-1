@@ -81,8 +81,8 @@ const BlockerRow = ({ blocker, onResolved }) => {
     e.preventDefault();
     setBusy(true);
     try {
-      await cadence.resolveBlocker(blocker.id, reason.trim() || 'Resolved from the dashboard');
-      toast.success('Blocker resolved.');
+      const res = await cadence.resolveBlocker(blocker.id, reason.trim() || 'Resolved from the dashboard');
+      toast.success(`Blocker resolved.${res?.owner_notified ? ' The owner was told on Telegram.' : ''}`);
       setOpen(false);
       await onResolved();
     } catch (err) {
@@ -301,7 +301,7 @@ const TaskDrawer = ({ taskId, tasks, people, dataTick, onClose, onOpenTask, onCh
               <span className="text-lg font-extrabold text-slate-900">{shown.key}</span>
               {shown.status && <StatusChip status={shown.status} />}
               {shown.readiness && <Chip tone={shown.readiness === 'waiting' ? 'amber' : 'green'}>{shown.readiness}</Chip>}
-              {shown.on_critical_path && <Chip tone="red">critical path</Chip>}
+              {Boolean(shown.on_critical_path) && <Chip tone="red">critical path</Chip>}
             </div>
             <p className="text-sm text-slate-700 mt-0.5">{shown.title}</p>
             <p className="text-xs text-slate-500 mt-0.5">

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { LogOut, Send, Radio, Bot, FileDown, Newspaper, Plus } from 'lucide-react';
+import { LogOut, Send, Radio, Bot, FileDown, Newspaper, Plus, Activity } from 'lucide-react';
 import { cadence } from '../../api/cadence';
 import { toast } from '../../hooks/useToastStore';
 import { downloadText, primaryButton, secondaryButton, slug } from './helpers';
@@ -94,12 +94,17 @@ const Header = ({
   });
 
   return (
-    <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
+    <header className="bg-white/95 backdrop-blur border-b border-slate-200 shadow-sm sticky top-0 z-30">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 space-y-3">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <div className="mr-auto">
-            <h1 className="text-xl font-extrabold text-slate-900 leading-tight">Cadence</h1>
-            <p className="text-xs text-slate-500">Signed in as {displayName}</p>
+          <div className="mr-auto flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm" aria-hidden="true">
+              <Activity className="h-5 w-5" />
+            </span>
+            <div>
+              <h1 className="text-xl font-extrabold text-slate-900 leading-tight">Cadence</h1>
+              <p className="text-xs text-slate-500">Signed in as {displayName}</p>
+            </div>
           </div>
 
           {projects.length > 0 && (
@@ -110,7 +115,7 @@ const Header = ({
               className="border border-slate-300 rounded-xl px-3 py-2 text-sm bg-white max-w-[14rem] sm:max-w-xs"
             >
               {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}{p.owner_user_id ? '' : ' (shared demo)'}</option>
+                <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
           )}
@@ -137,7 +142,7 @@ const Header = ({
             <div className="flex-1 min-w-[12rem]">
               <div className="flex justify-between text-xs text-slate-500 mb-1">
                 <span>{project?.name}</span>
-                <span className="font-semibold text-slate-700">{complete} of {total} tasks complete</span>
+                <span className="font-semibold text-slate-700">{complete} of {total} tasks complete{total ? ` · ${pct}%` : ''}</span>
               </div>
               <div
                 className="h-2 rounded-full bg-slate-100 overflow-hidden"
@@ -147,7 +152,7 @@ const Header = ({
                 aria-valuenow={complete}
                 aria-label="Project progress"
               >
-                <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${pct}%` }} />
+                <div className="h-full bg-gradient-to-r from-emerald-400 to-emerald-500 transition-all duration-500" style={{ width: `${pct}%` }} />
               </div>
             </div>
             <div className="flex flex-wrap gap-2">

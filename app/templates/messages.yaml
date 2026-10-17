@@ -101,7 +101,7 @@ NOT_UNDERSTOOD:
   text: "I didn't quite catch that. Which fits <b>{task_title}</b>?"
 
 OFF_TOPIC:
-  text: "I only keep track of project tasks. Send /mytasks to see yours."
+  text: "I only keep track of project tasks and passing messages between teammates. To reach someone say \"tell Priya ...\" or \"@Rohan ...\". /mytasks shows your tasks."
 
 OVERRIDE_NOTICE:
   text: "{lead} set <b>{task_key} · {task_title}</b> to {status}. {reason}"
@@ -141,3 +141,21 @@ BLOCKER_SELF_REMINDER:
 
 HANDOFF_SELF:
   text: "You asked for help with <b>{task_title}</b>. Suggested new owner: {suggested_owner} (skills: {skills}, {open_count} open tasks). Reassign it on the dashboard: open the task and use Lead override."
+
+RELAY_TO_PERSON:
+  text: |
+    💬 <b>{sender}</b>{role_tag}{about} says:
+    “{message}”
+    Reply "tell {sender} ..." and I'll pass it back.
+
+RELAY_SENT:
+  text: "Sent to {recipients}."
+
+RELAY_FAILED:
+  text: "{summary}"
+
+BLOCKER_CLEARED:
+  text: "Good news: {sender} cleared your blocker on <b>{task_key} · {task_title}</b> (<i>{blocker}</i>).{note_part}{routing_part}"
+
+BLOCKER_CLEARED_HELPER:
+  text: "FYI: {sender} says {reporter}'s blocker on <b>{task_title}</b> (<i>{blocker}</i>) is cleared, so nothing is needed from you."

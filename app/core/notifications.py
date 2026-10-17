@@ -30,7 +30,7 @@ _TEMPLATES: dict | None = None
 def _load_templates() -> dict:
     global _TEMPLATES
     if _TEMPLATES is None:
-        _TEMPLATES = yaml.safe_load(_TEMPLATES_PATH.read_text())
+        _TEMPLATES = yaml.safe_load(_TEMPLATES_PATH.read_text(encoding="utf-8"))
     return _TEMPLATES
 
 
@@ -170,6 +170,13 @@ def render_template(template_key: str, context: dict) -> str:
         "{hint}":            _esc(context.get("hint", "")),
         "{summary}":         _esc(context.get("summary", "")),
         "{github}":          _esc(context.get("github", "")),
+        # Person-to-person messages. User-written text goes last so a stray "{name}" inside it is never expanded.
+        "{sender}":          _esc(context.get("sender", "")),
+        "{role_tag}":        _esc(context.get("role_tag", "")),
+        "{about}":           _esc(context.get("about", "")),
+        "{note_part}":       _esc(context.get("note_part", "")),
+        "{recipients}":      _esc(context.get("recipients", "")),
+        "{message}":         _esc(context.get("message", "")),
     }
 
     for k, v in replacements.items():

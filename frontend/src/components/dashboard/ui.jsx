@@ -22,7 +22,7 @@ export const EmptyState = ({ icon: Icon, title, children, action }) => (
 );
 
 export const Panel = ({ icon: Icon, title, actions, children, className = '' }) => (
-  <section className={`bg-white rounded-2xl border border-slate-200 p-5 ${className}`}>
+  <section className={`bg-white rounded-2xl border border-slate-200 shadow-sm p-5 ${className}`}>
     {(title || actions) && (
       <div className="flex items-center justify-between gap-3 mb-3">
         <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">

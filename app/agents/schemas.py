@@ -83,12 +83,21 @@ class TaskUpdate(BaseModel):
     evidence: str | None = None        # quote from message justifying the status
 
 
+class RelayOut(BaseModel):
+    """Something the sender wants passed to another person ("tell Priya...", "@Rohan can you...")."""
+    to: str = ""                        # a teammate's name, "lead", or "everyone"; "" when task_key says who
+    text: str = ""                      # what to pass on, in the sender's own words
+    task_key: str | None = None         # the task it is about, if any
+    resolves_blocker: bool = False      # the LEAD says the blocker on task_key (or on `to`'s task) is cleared
+
+
 IntentType = Literal[
     "status_update",
     "progress_note",
     "blocker_report",
     "correction",
     "handoff_request",
+    "message_relay",
     "off_topic",
     "question",
 ]
@@ -97,6 +106,7 @@ IntentType = Literal[
 class Interpretation(BaseModel):
     intent: IntentType = "status_update"
     updates: list[TaskUpdate] = []
+    messages: list[RelayOut] = []      # messages for other people; may come with or without updates
     needs_clarification: bool = False
     clarification_question: str | None = None
     raw_message: str = ""              # echo for logging / dashboard "why" panel

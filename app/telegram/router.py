@@ -27,7 +27,9 @@ from app.agents.fastpath import quick_interpretation
 from app.config import settings
 from app.core.dependency_engine import on_blocker_raised, on_task_completed
 from app.core.notifications import NotificationBatch
-from app.core.policy import apply as policy_apply
+from app.core.policy import apply as policy_apply, blocked_tasks_for
+from app.core.relay import _people, parse_directed, parse_resolution
+from app.core.unblock import clear_blockers
 from app.db import repo
 from app.llm.gateway import LLMFailure
 from app.tools.git_checker import verify_updates
@@ -194,12 +196,31 @@ async def _process_burst(
             })
             return
 
+        # ── Addressed to someone? "@Rohan ...", "tell the lead ...", "unblock Omar" ──
+        # Plain rules, so it works at once and even when the model is down. Anything fuzzier
+        # ("done, @Priya please review") still goes to the Coordinator Agent below.
+        team = await repo.list_participants(db, project_id)
+        directed = None
+        resolution = parse_resolution(burst_text, team, sender)
+        if resolution is not None:
+            # "unblock Omar" is always a clearing (and the lead is told if Omar has nothing blocked).
+            # "fixed T9" is one only when T9 really has an open blocker; otherwise it is an ordinary
+            # status line about the lead's own work and the model reads it.
+            if resolution.messages[0].task_key is None or await blocked_tasks_for(
+                db, project_id, resolution.messages[0], _people(team), {p["id"]: p for p in team}, sender,
+            ):
+                directed = resolution
+        if directed is None:
+            directed = parse_directed(burst_text, team, sender)
+
         # ── Coordinator Agent (skipped for unambiguous one-word replies) ───────
-        fast = quick_interpretation(
+        fast = None if directed else quick_interpretation(
             burst_text, sender_tasks=enriched_sender_tasks, pending_question=open_pq,
         )
         try:
-            if fast is not None:
+            if directed is not None:
+                interpretation = directed
+            elif fast is not None:
                 interpretation = fast
                 interpretation.raw_message = burst_text
             else:
@@ -213,12 +234,13 @@ async def _process_burst(
                     message_text=burst_text,
                     db=db,
                     sender_role=sender["role"],
+                    team=team,
                 )
         except LLMFailure as e:
             log.error("LLM failure for participant=%d: %s", participant_id, e)
-            # R15 fallback: send buttons for most likely task
+            # R15 fallback: send buttons for the most likely task, or say so (never stay silent)
+            notification = NotificationBatch()
             if sender_tasks:
-                notification = NotificationBatch()
                 notification.add(
                     participant_id=participant_id,
                     template_key="NOT_UNDERSTOOD",
@@ -226,7 +248,14 @@ async def _process_burst(
                     question_kind="clarify_status",
                     question_task_id=sender_tasks[0]["id"],
                 )
-                await notification.flush(db, now=now, source_msg_id=msg_id)
+            else:
+                notification.add(
+                    participant_id=participant_id,
+                    template_key="RELAY_FAILED",
+                    context={"summary": "I couldn't read that just now. Try again in a moment, or say "
+                                        "\"tell Priya ...\" to message someone."},
+                )
+            await notification.flush(db, now=now, source_msg_id=msg_id)
             return
 
         # Update message with interpretation JSON
@@ -261,7 +290,9 @@ async def _process_burst(
             verifications=verifications,
         )
 
-        if fast is not None:
+        if directed is not None:
+            decision.rule_log.insert(0, "Addressed message: passed on by rule, no AI call was needed")
+        elif fast is not None:
             decision.rule_log.insert(0, "Fast path: a plain one-word status, so no AI call was needed")
         await db.commit()
         await sse_publish("interpretation", {
@@ -291,8 +322,37 @@ async def _process_burst(
         for upd in decision.approved:
             await _execute_update(upd, project_id, participant_id, msg_id, db, now, sse_publish)
 
+        # ── The lead clearing a blocker from Telegram ─────────────────────────
+        for res in decision.resolutions:
+            await _execute_resolution(res, project_id, sender, msg_id, db, now, sse_publish)
+
         # ── Flush notification batch ──────────────────────────────────────────
         await decision.notifications.flush(db, now=now, source_msg_id=msg_id)
+
+
+async def _execute_resolution(res, project_id: int, sender: dict, msg_id: int | None, db, now: str, sse_publish) -> None:
+    """Clear the blocker the lead named, move the task on, and tell the owner (and any helper)."""
+    task = await repo.get_task(db, res.task_id)
+    if not task:
+        return
+    cleared = await clear_blockers(
+        db, task, by=sender, note=res.note, now=now, actor="lead", source_msg_id=msg_id,
+    )
+    if not cleared.cleared:
+        return
+    await cleared.batch.flush(db, now=now, source_msg_id=msg_id)
+    await db.commit()
+    for blocker in cleared.blockers:
+        await sse_publish("blocker.resolved", {
+            "blocker_id": blocker["id"], "task_id": task["id"], "task_key": task["key"], "reason": res.note or None,
+        })
+    fresh = await repo.get_task(db, task["id"])
+    await sse_publish("task.updated", {
+        "task_key": task["key"], "status": (fresh or task)["status"], "readiness": (fresh or task)["readiness"],
+        "flags": json.loads((fresh or task).get("flags_json") or "[]"),
+        "changed_fields": ["status"] if cleared.new_status else [],
+        "reason": res.note or f"Blocker cleared by {sender['name']}", "rule_fired": "lead override",
+    })
 
 
 async def _revert_latest(db, sender: dict, *, now: str, reason: str, sse_publish) -> str:

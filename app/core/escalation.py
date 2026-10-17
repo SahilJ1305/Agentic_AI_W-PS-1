@@ -31,6 +31,11 @@ from app.db import repo
 
 log = logging.getLogger(__name__)
 
+# Only questions that wait on a person's real answer are chased. A clarification the bot asked
+# ("which fits T3?") that nobody answered is not worth three reminders and an alert to the lead;
+# before this, one message the bot could not read made the lead get "any update on ...?" every 2 minutes.
+_CHASED_KINDS = ("status_check", "unblock_request", "confirm_unblocked")
+
 
 def _paused(person: dict, now: datetime) -> bool:
     until = parse_ts(person.get("paused_until"))
@@ -56,12 +61,14 @@ async def _silence_ladder(db: aiosqlite.Connection, now: datetime, result: dict)
     """
     step = settings.effective_nudge_after_min
     cur = await db.execute(
-        """SELECT q.* FROM pending_questions q
+        f"""SELECT q.* FROM pending_questions q
            JOIN participants p ON p.id = q.participant_id
            JOIN projects pr ON pr.id = p.project_id
            WHERE q.status = 'open' AND q.task_id IS NOT NULL
+             AND q.kind IN ({",".join("?" * len(_CHASED_KINDS))})
              AND pr.status = 'active' AND p.telegram_chat_id IS NOT NULL
-           ORDER BY q.created_at, q.id"""
+           ORDER BY q.created_at, q.id""",
+        _CHASED_KINDS,
     )
     by_person: dict[int, list[dict]] = {}
     for row in cur_rows(await cur.fetchall()):
@@ -91,10 +98,12 @@ async def _silence_ladder(db: aiosqlite.Connection, now: datetime, result: dict)
         stamp = now.isoformat()
         batch = NotificationBatch()
 
+        is_lead = person.get("role") == "lead"
         if rung == 0 and age_min >= step:
             batch.add(participant_id=person_id, template_key="NUDGE_1", context=ctx,
                       dedupe_key=f"nudge1:{oldest['id']}")
-            await _set_rung(db, ids, 1)
+            # The lead has nobody above them: one reminder, never "I'll let <the lead> know" to the lead.
+            await _set_rung(db, ids, 2 if is_lead else 1)
             result["nudges"] += 1
         elif rung == 1 and age_min >= 2 * step:
             lead = await repo.get_lead(db, person["project_id"])
@@ -178,14 +187,18 @@ async def _blocker_ladder(db: aiosqlite.Connection, now: datetime, result: dict)
             elif lead:
                 batch.add(participant_id=lead["id"], template_key="BLOCKER_ESCALATED",
                           context={**base, "minutes": round(age_min)},
-                          dedupe_key=f"blocker-escalate:{blocker['id']}:1")
+                          dedupe_key=f"blocker-escalate:{blocker['id']}")
                 result["blocker_alerts"] += 1
+                # The lead has now been told: do not tell them the same thing again a few minutes later.
+                await _set_level(db, blocker["id"], 2)
+                await batch.flush(db, now=stamp)
+                continue
             await _set_level(db, blocker["id"], 1)
         elif level == 1 and age_min >= 2 * step:
             if lead and not owner_is_lead:
                 batch.add(participant_id=lead["id"], template_key="BLOCKER_ESCALATED",
                           context={**base, "minutes": round(age_min)},
-                          dedupe_key=f"blocker-escalate:{blocker['id']}:2")
+                          dedupe_key=f"blocker-escalate:{blocker['id']}")
                 result["blocker_alerts"] += 1
             await _set_level(db, blocker["id"], 2)
         await batch.flush(db, now=stamp)
